@@ -4,19 +4,25 @@
 import numpy as np
 
 
-# find a path from an H atom to another atom three hops away
-def find_fourway_atomic_path(molecule, start_atom, end_atom):
-    if len(molecule[start_atom]['bonds']) > 1:
+# find a path from an H atom to another atom k hops away
+def find_atomic_path(molecule, atom_0, atom_k, k):
+    if len(molecule[atom_0]['bonds']) > 1:
         raise ValueError('first atom connected to more than one atom')
 
-    middle_atom_1 = molecule[start_atom]['bonds'][0]
-    middle_atom_1_neighbors = molecule[middle_atom_1]['bonds']
+    atom_1 = molecule[atom_0]['bonds'][0]
 
-    end_atom_neighbors = molecule[end_atom]['bonds']
-    intersecting_atoms = [a for a in middle_atom_1_neighbors if a in end_atom_neighbors]
-    middle_atom_2 = intersecting_atoms[0]
-
-    return start_atom, middle_atom_1, middle_atom_2, end_atom
+    if k == 1:
+        return atom_0, atom_1
+    elif k == 2:
+        return atom_0, atom_1, atom_k
+    elif k == 3:
+        atom_1_neighbors = molecule[atom_1]['bonds']
+        atom_k_neighbors = molecule[atom_k]['bonds']
+        intersecting_atoms = [a for a in atom_1_neighbors if a in atom_k_neighbors]
+        atom_2 = intersecting_atoms[0]
+        return atom_0, atom_1, atom_2, atom_k
+    else:
+        raise ValueError(f'Atomic path not supported for k = {k} hops')
 
 
 # Source: stackoverflow (Dihedral/Torsion Angle From Four Points in Cartesian Coordinates in Python)
