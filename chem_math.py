@@ -4,6 +4,12 @@
 import numpy as np
 
 
+def angle_between(p, q):
+    p_norm = np.linalg.norm(p)
+    q_norm = np.linalg.norm(q)
+    return np.arccos(np.dot(p, q) / (p_norm * q_norm))
+
+
 # find a path from an H atom to another atom k hops away
 def find_atomic_path(molecule, atom_0, atom_k, k):
     if len(molecule[atom_0]['bonds']) > 1:
@@ -42,7 +48,7 @@ def dihedral_angle(p0, p1, p2, p3):
 
 
 def vectorized_dihedral_angle(p0, p1, p2, p3):
-    """Praxeolitic formula, 1 sqrt, 1 cross product"""
+    """Each parameter is an array of shape (n, 3)"""
     b0 = -1.0 * (p1 - p0)
     b1 = p2 - p1
     b2 = p3 - p2
@@ -54,3 +60,6 @@ def vectorized_dihedral_angle(p0, p1, p2, p3):
     x = np.inner(v, w).diagonal()
     y = np.inner(np.cross(b1, v), w).diagonal()
     return np.degrees(np.arctan2(y, x))
+
+
+
