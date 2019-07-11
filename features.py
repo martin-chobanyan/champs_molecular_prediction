@@ -2,10 +2,65 @@
 # -*- coding: utf-8 -*-
 
 import numpy as np
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+import torch
 from chem_math import angle_between, find_atomic_path
 
 
-def extract_features(name, a0, a1, molec_struct_map, bond_separation=1):
+def get_unique_hybridizations(molec_struct_map):
+    hybridization_set = set()
+    for name in molec_struct_map:
+        molecule_dict = molec_struct_map[name]
+        molecule = molecule_dict['rdkit']
+        h = [str(atom.GetHybridization()) for atom in molecule.GetAtoms()]
+        hybridization_set.update(h)
+    return hybridization_set
+
+
+def get_edge_index(molecule):
+    bonds = []
+    for bond in molecule.GetBonds():
+        ai = bond.GetBeginAtomIdx()
+        aj = bond.GetEndAtomIdx()
+        bonds.append((ai, aj))
+        bonds.append((aj, ai))
+    edge_index = torch.LongTensor(bonds).transpose(1, 0)
+    return edge_index
+
+
+def get_edge_attributes(molecule, dist_mtrx):
+    edge_attributes = []
+    for bond in molecule.GetBonds():
+        x = dict()
+        x['start_atom'] = bond.GetBeginAtom().GetSymbol()
+        x['end_atom'] = bond.GetEndAtom().GetSymbol()
+        x['type'] = str(bond.GetBondType())
+        x['conjugated'] = int(bond.GetIsConjugated())
+        x['distance'] = dist_mtrx[bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()]
+        edge_attributes.append(x)
+    return edge_attributes
+
+
+class ElementEncoder(object):
+    """One-hot encode the elements used in molecules"""
+
+    def __init__(self):
+        base_symbols = ['H', 'C', 'N', 'O', 'F']
+        self.label_enc = LabelEncoder()
+        self.label_enc.fit_transform(base_symbols)
+        element_labels = self.label_enc.transform(base_symbols)
+
+        self.onehot_enc = OneHotEncoder(categories='auto', sparse=False)
+        self.onehot_enc = self.onehot_enc.fit(np.expand_dims(element_labels, 1))
+
+    def __call__(self, symbols):
+        labels = self.label_enc.transform(symbols)
+        labels = np.expand_dims(labels, 1)
+        encoding = self.onehot_enc.transform(labels)
+        return encoding
+
+
+def extract_basic_features(name, a0, a1, molec_struct_map, bond_separation=1):
     # H, C, N, O, F, distance
     num_features = 6 + (bond_separation - 1)
     features = np.zeros(num_features)
@@ -64,7 +119,7 @@ def calculate_more_features(coupling_data, coupling_type, molec_struct_map):
     for i, (name, a0, a1) in enumerate(zip(coupling_data['molecule_name'],
                                            coupling_data['atom_index_0'],
                                            coupling_data['atom_index_1'])):
-        f = extract_features(name, a0, a1, molec_struct_map, bond_separation)
+        f = extract_basic_features(name, a0, a1, molec_struct_map, bond_separation)
         features.append(f)
 
     features = np.stack(features)

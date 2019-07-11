@@ -9,6 +9,7 @@ def extract_list_from_string(s):
     return [int(i) for i in tokens]
 
 
+# TODO: replace this outdated code with rdkit_features.ipynb
 def create_molecule_structure_map(structures):
     """Create a dictionary mapping the molecule name to each of its atoms' symbols and coordinates
 
