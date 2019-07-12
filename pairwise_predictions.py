@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
+from dtsckit.utils import write_pickle
 
 
 def process_filename(filename):
@@ -54,13 +55,15 @@ if __name__ == '__main__':
     submission_df['scalar_coupling_constant'] = 0
     submission_df.index = submission_df['id'].values
 
+    models = dict()
+    scores = dict()
     total_time = 0
     for filename in os.listdir(TRAIN_DIR):
         ###################################### Prepare the training data ###############################################
+        start_time = time.time()
         coupling_type, num_hops, h2h = process_filename(filename)
         print(f'Training model for {coupling_type}')
         train_df = pd.read_csv(os.path.join(TRAIN_DIR, filename))
-        train_df = train_df.sample(1000)
 
         if num_hops > 1:
             faulty_molecule_mask, _ = get_faulty_pairs(train_df)
@@ -75,19 +78,21 @@ if __name__ == '__main__':
                    'max_depth': [3, 5, 8, None],
                    'max_features': ['sqrt', 0.5]}]
 
-        start_time = time.time()
         clf = GridSearchCV(RandomForestRegressor(300), params, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
         clf.fit(x_train, y_train)
 
         score = np.log(-1 * clf.best_score_)
+        scores[coupling_type] = score
         print(f'Log MAE Score: {score}')
         print(f'Best parameters: {clf.best_params_}')
         ######################################## Train on all the data #################################################
         model = clf.best_estimator_
         model.fit(x_train, y_train)
+        models[coupling_type] = model
 
         print('Feature importances:')
-        print(model.feature_importances_)
+        for feature, importance in zip(feature_columns, model.feature_importances_):
+            print(f'{feature}: {importance}')
         ###################################### Prepare the testing data ################################################
         test_df = pd.read_csv(os.path.join(TEST_DIR, filename))
 
@@ -107,7 +112,9 @@ if __name__ == '__main__':
         total_time += elapsed_time
         ################################################################################################################
 
-    print(f'\nTotal time elapsed: {total_time}')
+    print(f'\nTotal time elapsed: {total_time} hours')
     print('\nSaving the submissions...')
+    write_pickle(models, os.path.join(ROOT_DIR, 'rf_models.pkl'))
+    write_pickle(scores, os.path.join(ROOT_DIR, 'rf_scores.pkl'))
     submission_df.to_csv(submission_filepath, index=False)
     print('Done!')
