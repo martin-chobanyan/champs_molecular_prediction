@@ -58,81 +58,112 @@ def find_hybridization(molecule_map, molec_name, atom_idx):
 
 
 ########################################################################################################################
-#                 Define the functions to extract the appropriate features from each coupling type
+#                  Define the objects to extract the appropriate features from each coupling type
 ########################################################################################################################
 
-def prepare_1JHC(df_1jhc, molecule_map):
-    """
-    Features:
-    - d of H-C
-    - C neighbors
-    - C hybridization
+class FeatureEngineer(object):
+    """An base class for the feature engineering objects across coupling types
 
     Parameters
     ----------
-    df_1jhc: pd.DataFrame
+    molecule_map: dict
+    """
+
+    def __init__(self, molecule_map):
+        self.molecule_map = molecule_map
+
+    def __call__(self, df):
+        """Get the distance between the atom pairs
+
+        Parameters
+        ----------
+        df: pd.DataFrame
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        df['distance'] = df.progress_apply(
+            lambda x: get_distance(self.molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']), axis=1)
+        return df
+
+
+class Prepare1JH_(FeatureEngineer):
+    """Prepare features for 1JHC and 1JHN
+
+    Features:
+    - distance of H-C (or H-N)
+    - C neighbors (or N neighbors)
+    - C hybridization (or N hybridization)
+    """
+
+    @staticmethod
+    def feature_cols():
+        return ['distance', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'sp', 'sp2', 'sp3']
+
+    def __call__(self, df):
+        df = super().__call__(df)
+
+        # get the neighbor distribution
+        neighbor_cols = ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors']
+        c_neighbors = df.progress_apply(
+            lambda x: calculate_neighborhood(self.molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
+        c_neighbors = pd.DataFrame(c_neighbors.values.tolist(), columns=neighbor_cols)
+        df = pd.concat([df, c_neighbors], axis=1)
+
+        # get the hybridization
+        hybrid_cols = ['sp', 'sp2', 'sp3']
+        hybridizations = df.progress_apply(
+            lambda x: find_hybridization(self.molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
+        hybridizations = pd.DataFrame(hybridizations.values.tolist(), columns=hybrid_cols)
+        df = pd.concat([df, hybridizations], axis=1)
+
+        return df
+
+
+def prepare_2JHH(df_2jhh, molecule_map):
+    """
+    Features:
+    - d of H-H
+    - d of H-X
+    - element of X
+    - neighbors of X
+    - hybridization of X
+
+    Parameters
+    ----------
+    df_2jhh: pd.DataFrame
     molecule_map: dict
 
     Returns
     -------
     pd.DataFrame
     """
-    # get the distance
-    df_1jhc['distance'] = df_1jhc.progress_apply(
-        lambda x: get_distance(molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']), axis=1)
+    # df_2jhh['distance'] = df_2jhh.progress_apply(
+    #     lambda x: get_distance(molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']), axis=1)
+    #
+    #
+    # # get the distance
+    # df_1jhn['distance'] = df_1jhn.progress_apply(
+    #     lambda x: get_distance(molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']), axis=1)
+    #
+    # # get the neighbor distribution of N
+    # neighbor_cols = ['H', 'C', 'N', 'O']
+    # c_neighbors = df_1jhn.progress_apply(
+    #     lambda x: calculate_neighborhood(molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
+    # c_neighbors = pd.DataFrame(c_neighbors.values.tolist(), columns=neighbor_cols)
+    # df_1jhn = pd.concat([df_1jhn, c_neighbors], axis=1)
+    #
+    # # get the hybridization of C
+    # hybrid_cols = ['N_sp', 'N_sp2', 'N_sp3']
+    # hybridizations = df_1jhn.progress_apply(
+    #     lambda x: find_hybridization(molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
+    # hybridizations = pd.DataFrame(hybridizations.values.tolist(), columns=hybrid_cols)
+    # df_1jhn = pd.concat([df_1jhn, hybridizations], axis=1)
+    #
+    # return df_1jhn
 
-    # get the neighbor distribution of C
-    neighbor_cols = ['H', 'C', 'N', 'O']
-    c_neighbors = df_1jhc.progress_apply(
-        lambda x: calculate_neighborhood(molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
-    c_neighbors = pd.DataFrame(c_neighbors.values.tolist(), columns=neighbor_cols)
-    df_1jhc = pd.concat([df_1jhc, c_neighbors], axis=1)
-
-    # get the hybridization of C
-    hybrid_cols = ['C_sp', 'C_sp2', 'C_sp3']
-    hybridizations = df_1jhc.progress_apply(
-        lambda x: find_hybridization(molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
-    hybridizations = pd.DataFrame(hybridizations.values.tolist(), columns=hybrid_cols)
-    df_1jhc = pd.concat([df_1jhc, hybridizations], axis=1)
-
-    return df_1jhc
-
-
-def prepare_1JHN(df_1jhn, molecule_map):
-    """
-    Features:
-    - d of H-N
-    - N neighbors
-    - N hybridization
-
-    Parameters
-    ----------
-    df_1jhn: pd.DataFrame
-    molecule_map: dict
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    # get the distance
-    df_1jhn['distance'] = df_1jhn.progress_apply(
-        lambda x: get_distance(molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']), axis=1)
-
-    # get the neighbor distribution of N
-    neighbor_cols = ['H', 'C', 'N', 'O']
-    c_neighbors = df_1jhn.progress_apply(
-        lambda x: calculate_neighborhood(molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
-    c_neighbors = pd.DataFrame(c_neighbors.values.tolist(), columns=neighbor_cols)
-    df_1jhn = pd.concat([df_1jhn, c_neighbors], axis=1)
-
-    # get the hybridization of C
-    hybrid_cols = ['N_sp', 'N_sp2', 'N_sp3']
-    hybridizations = df_1jhn.progress_apply(
-        lambda x: find_hybridization(molecule_map, x['molecule_name'], x['atom_index_1']), axis=1)
-    hybridizations = pd.DataFrame(hybridizations.values.tolist(), columns=hybrid_cols)
-    df_1jhn = pd.concat([df_1jhn, hybridizations], axis=1)
-
-    return df_1jhn
+    return df_2jhh
 
 
 if __name__ == '__main__':
@@ -150,10 +181,10 @@ if __name__ == '__main__':
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
 
         print(f'Coupling: {coupling_type}')
-        if coupling_type != '1JHN':
+        if coupling_type != '1JHC':
             continue
 
-        data = prepare_1JHC(data, molec_struct_map)
+        data = Prepare1JH_(molec_struct_map)(data)
         for col in data.columns:
             print(f'Column: {col}')
             print(data[col].iloc[:5].values)
