@@ -60,6 +60,7 @@ class ElementEncoder(object):
         return encoding
 
 
+# OLD CODE:
 def extract_basic_features(name, a0, a1, molec_struct_map, bond_separation=1):
     # H, C, N, O, F, distance
     num_features = 6 + (bond_separation - 1)
