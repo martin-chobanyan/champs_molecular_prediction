@@ -6,7 +6,6 @@ import re
 from argparse import ArgumentParser
 import numpy as np
 import pandas as pd
-from rdkit.Chem.rdchem import Atom
 from dtsckit.utils import read_pickle
 from chem_math import find_atomic_path, vectorized_dihedral_angle
 
@@ -71,14 +70,51 @@ def encode_inner_element(molecule_map, molec_name, atom_idx):
         raise ValueError("'Inner atoms' must be carbons, nitrogens, or oxygens")
 
 
-def get_middle_atom(molecule_map, molecule_name, atom_0_idx, atom_1_idx):
+def get_middle_atom(molecule_map, molecule_name, start_atom_idx, end_atom_idx):
     try:
         molecule = molecule_map[molecule_name]['rdkit']
-        _, middle_atom_idx, _ = find_atomic_path(molecule.GetAtomWithIdx(atom_0_idx),
-                                                 molecule.GetAtomWithIdx(atom_1_idx), k=2)
+        _, middle_atom_idx, _ = find_atomic_path(molecule.GetAtomWithIdx(start_atom_idx),
+                                                 molecule.GetAtomWithIdx(end_atom_idx), k=2)
         return middle_atom_idx
     except:
         return -1
+
+
+def get_middle_atoms(molecule_map, molecule_name, start_atom_idx, end_atom_idx):
+    try:
+        molecule = molecule_map[molecule_name]['rdkit']
+        _, middle_atom_idx_1, middle_atom_idx_2, _ = find_atomic_path(molecule.GetAtomWithIdx(start_atom_idx),
+                                                                      molecule.GetAtomWithIdx(end_atom_idx), k=3)
+        return [middle_atom_idx_1, middle_atom_idx_2]
+    except:
+        return [-1, -1]
+
+
+def calculate_dihedral_angles(df, molecule_map, start_col, x_col, y_col, end_col, step=10000):
+    # find the coordinates of each atom in the path
+    coords = {start_col: [], x_col: [], y_col: [], end_col: []}
+    for i, x in df.iterrows():
+        molecule_coords = molecule_map[x['molecule_name']]['coords']
+        coords[start_col].append(molecule_coords[x[start_col]])
+        coords[x_col].append(molecule_coords[x[x_col]])
+        coords[y_col].append(molecule_coords[x[y_col]])
+        coords[end_col].append(molecule_coords[x[end_col]])
+
+    # stack the vector positions into 2D arrays
+    for position, coordinate in coords.items():
+        coords[position] = np.stack(coordinate)
+
+    # calculate the dihedral angle in chunks
+    num_rows = df.shape[0]
+    end = ((num_rows // step) + 1) * step
+    df['dihedral'] = 0.0
+    for i in range(0, end, step):
+        print(f'Step {int(i / step)} / {int(end / step)}')
+        df.iloc[i:i + step - 1, -1] = vectorized_dihedral_angle(coords[start_col][i:i + step],
+                                                                coords[x_col][i:i + step],
+                                                                coords[y_col][i:i + step],
+                                                                coords[end_col][i:i + step])
+    return df
 
 
 ########################################################################################################################
@@ -167,8 +203,8 @@ class Prepare2JHH(FeatureEngineer):
     """Prepares features for 2JHH coupling, where there is an atomic path H-X-H
 
     Features:
-    - d of H-H
-    - d of H-X
+    - distance of H-H
+    - distance of H-X
     - element of X
     - neighbors of X
     - hybridization of X
@@ -219,7 +255,8 @@ class Prepare2JH_(Prepare2JHH):
     @staticmethod
     def feature_cols():
         base_cols = Prepare2JHH.feature_cols()
-        return base_cols + []
+        return base_cols + ['distance_x_', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
+                            'sp', 'sp2', 'sp3']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -231,6 +268,79 @@ class Prepare2JH_(Prepare2JHH):
 
         hybrid_cols = ['sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
+
+        return df
+
+
+class Prepare3JHH(FeatureEngineer):
+    """Prepares features for 3JHH coupling, where there is an atomic path H-X-Y-H
+
+    Features:
+    - distance of H-H
+    - distance of H-X
+    - distance of X-Y
+    - distance of Y-H
+    - distance of H-Y
+    - distance of X-H
+    - element of X
+    - element of Y
+    - neighbors of X
+    - neighbors of Y
+    - hybridization of X
+    - hybridization of Y
+    - dihedral angle
+    - cos(theta)
+    - cos(2*theta)
+    """
+
+    @staticmethod
+    def feature_cols():
+        return ['distance', 'distance_0x', 'distance_xy', 'distance_y1', 'distance_0y', 'distance_x1',
+                'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
+                'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
+                'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
+                'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3',
+                'dihedral', 'cos_theta', 'cos_2theta']
+
+    def __call__(self, df):
+        df = super().__call__(df)
+
+        # get the indices of the atoms in between the hydrogen pair
+        path_cols = ['atom_index_x', 'atom_index_y']
+        middle_atoms = df.apply(
+            lambda x: get_middle_atoms(self.molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']),
+            axis=1)
+        middle_atoms = pd.DataFrame(middle_atoms.values.tolist(), columns=path_cols)
+        df = pd.concat([df, middle_atoms], axis=1)
+
+        df = self.get_distances(df, 'atom_index_0', 'atom_index_x', 'distance_0x')
+        df = self.get_distances(df, 'atom_index_x', 'atom_index_y', 'distance_xy')
+        df = self.get_distances(df, 'atom_index_y', 'atom_index_1', 'distance_y1')
+        df = self.get_distances(df, 'atom_index_0', 'atom_index_y', 'distance_0y')
+        df = self.get_distances(df, 'atom_index_x', 'atom_index_1', 'distance_x1')
+
+        x_element_cols = ['x_nitrogen', 'x_oxygen']
+        y_element_cols = ['y_nitrogen', 'y_oxygen']
+        df = self.get_element_encodings(df, 'atom_index_x', x_element_cols)
+        df = self.get_element_encodings(df, 'atom_index_y', y_element_cols)
+
+        x_neighbor_cols = ['x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors']
+        y_neighbor_cols = ['y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors']
+        df = self.get_neighbors(df, 'atom_index_x', x_neighbor_cols)
+        df = self.get_neighbors(df, 'atom_index_y', y_neighbor_cols)
+
+        x_hybrid_cols = ['x_sp', 'x_sp2', 'x_sp3']
+        y_hybrid_cols = ['y_sp', 'y_sp2', 'y_sp3']
+        df = self.get_hybridizations(df, 'atom_index_x', x_hybrid_cols)
+        df = self.get_hybridizations(df, 'atom_index_y', y_hybrid_cols)
+
+        df = calculate_dihedral_angles(df, self.molecule_map, 'atom_index_0',
+                                       'atom_index_x', 'atom_index_y', 'atom_index_1')
+
+        # calculate the karplus features
+        dihedral_angles = np.radians(df['dihedral'])
+        df['cos_theta'] = np.cos(dihedral_angles)
+        df['cos_2theta'] = np.cos(2 * dihedral_angles)
 
         return df
 
@@ -248,11 +358,11 @@ if __name__ == '__main__':
         data = pd.read_csv(os.path.join(TARGET_DIR, filename)).head(100)
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
 
-        if coupling_type != '2JHN':
+        if coupling_type != '3JHH':
             continue
         print(f'Coupling: {coupling_type}')
 
-        data = Prepare2JH_(molec_struct_map)(data)
+        data = Prepare3JHH(molec_struct_map)(data)
         for col in data.columns:
             print(f'Column: {col}')
             print(data[col].iloc[:5].values)
