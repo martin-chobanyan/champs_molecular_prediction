@@ -345,25 +345,62 @@ class Prepare3JHH(FeatureEngineer):
         return df
 
 
+class Prepare3JH_(Prepare3JHH):
+    """Prepares features for 3JHC or 3JHN
+
+    Most of the features are the same as for 3JHH. Additionally:
+    - neighbors of C/N
+    - hybridization of C/N
+    """
+
+    @staticmethod
+    def feature_cols():
+        return Prepare3JHH.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
+                                             'sp', 'sp2', 'sp3']
+
+    def __call__(self, df):
+        df = super().__call__(df)
+
+        neighbor_cols = ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors']
+        df = self.get_neighbors(df, 'atom_index_1', neighbor_cols)
+
+        hybrid_cols = ['sp', 'sp2', 'sp3']
+        df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
+
+        return df
+
+
 if __name__ == '__main__':
-    print('Pairwise feature extraction:\n')
-    mode = 'train'
+    parser = ArgumentParser()
+    parser.add_argument('--mode', required=True, type=str, help='Specify training or testing mode')
+    args = parser.parse_args()
+
+    mode = args.mode
     ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
     TARGET_DIR = os.path.join(ROOT_DIR, mode)
+    print(f'Pairwise feature extraction on {mode}ing files\n')
 
     print('Reading the molecular structures...\n')
     molec_struct_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
 
     for filename in os.listdir(TARGET_DIR):
-        data = pd.read_csv(os.path.join(TARGET_DIR, filename)).head(100)
+        data = pd.read_csv(os.path.join(TARGET_DIR, filename))
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
-
-        if coupling_type != '3JHH':
-            continue
         print(f'Coupling: {coupling_type}')
 
-        data = Prepare3JHH(molec_struct_map)(data)
-        for col in data.columns:
-            print(f'Column: {col}')
-            print(data[col].iloc[:5].values)
-            print()
+        if coupling_type == '1JHC' or coupling_type == '1JHN':
+            data = Prepare1JH_(molec_struct_map)(data)
+        elif coupling_type == '2JHH':
+            data = Prepare2JHH(molec_struct_map)(data)
+        elif coupling_type == '2JHC' or coupling_type == '2JHN':
+            data = Prepare2JH_(molec_struct_map)(data)
+        elif coupling_type == '3JHH':
+            data = Prepare3JHH(molec_struct_map)(data)
+        elif coupling_type == '3JHC' or coupling_type == '3JHN':
+            data = Prepare3JH_(molec_struct_map)(data)
+        else:
+            raise ValueError(f"Unexpected coupling type: '{coupling_type}'")
+
+        print('Saving the file...\n')
+        data.to_csv(os.path.join(TARGET_DIR, filename), index=False)
+    print('Done!')
