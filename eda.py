@@ -28,3 +28,14 @@ def visualize_molecule(molecule_structures, name):
     coords = molecule['coords']
     system = ase.Atoms(positions=coords, symbols=symbols)
     return ase.visualize.view(system, viewer="x3d")
+
+if __name__ == '__main__':
+    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
+
+    train_df = pd.read_csv(os.path.join(ROOT_DIR, 'train.csv'))
+    train_dir = os.path.join(ROOT_DIR, 'train')
+    split_by_types(train_df, train_dir)
+
+    test_df = pd.read_csv(os.path.join(ROOT_DIR, 'test.csv'))
+    test_dir = os.path.join(ROOT_DIR, 'test')
+    split_by_types(test_df, test_dir)
