@@ -96,6 +96,11 @@ class FeatureEngineer(object):
     def __init__(self, molecule_map):
         self.molecule_map = molecule_map
 
+    def get_distances(self, df, atom_i_col, atom_j_col, col_name):
+        df[col_name] = df.apply(
+            lambda x: get_distance(self.molecule_map, x['molecule_name'], x[atom_i_col], x[atom_j_col]), axis=1)
+        return df
+
     def get_neighbors(self, df, atom_idx_col, col_names):
         neighbors = df.apply(lambda x: calculate_neighborhood(self.molecule_map, x['molecule_name'], x[atom_idx_col]),
                              axis=1)
@@ -128,9 +133,7 @@ class FeatureEngineer(object):
         -------
         pd.DataFrame
         """
-        df['distance'] = df.apply(
-            lambda x: get_distance(self.molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_1']), axis=1)
-        return df
+        return self.get_distances(df, 'atom_index_0', 'atom_index_1', 'distance')
 
 
 class Prepare1JH_(FeatureEngineer):
@@ -186,8 +189,7 @@ class Prepare2JHH(FeatureEngineer):
             axis=1)
 
         # get the distance between the first hydrogen and the X atom
-        df['distance_hx'] = df.apply(
-            lambda x: get_distance(self.molecule_map, x['molecule_name'], x['atom_index_0'], x['atom_index_x']), axis=1)
+        df = self.get_distances(df, 'atom_index_0', 'atom_index_x', 'distance_hx')
 
         # get the one hot encoded element of atom X
         x_element_cols = ['x_nitrogen', 'x_oxygen']
@@ -200,6 +202,35 @@ class Prepare2JHH(FeatureEngineer):
         # get the hybridization of atom X
         hybrid_cols = ['x_sp', 'x_sp2', 'x_sp3']
         df = self.get_hybridizations(df, 'atom_index_x', hybrid_cols)
+
+        return df
+
+
+class Prepare2JH_(Prepare2JHH):
+    """Prepares features for 2JHC or 2JHN coupling types
+
+    Features:
+    - all features from the 2JHH feature engineer
+    - distance from X to C/H
+    - neighbors of C/H
+    - hybridization of C/H
+    """
+
+    @staticmethod
+    def feature_cols():
+        base_cols = Prepare2JHH.feature_cols()
+        return base_cols + []
+
+    def __call__(self, df):
+        df = super().__call__(df)
+
+        df = self.get_distances(df, 'atom_index_x', 'atom_index_1', 'distance_x_')
+
+        neighbor_cols = ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors']
+        df = self.get_neighbors(df, 'atom_index_1', neighbor_cols)
+
+        hybrid_cols = ['sp', 'sp2', 'sp3']
+        df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
 
         return df
 
@@ -217,11 +248,11 @@ if __name__ == '__main__':
         data = pd.read_csv(os.path.join(TARGET_DIR, filename)).head(100)
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
 
-        if coupling_type != '2JHH':
+        if coupling_type != '2JHN':
             continue
         print(f'Coupling: {coupling_type}')
 
-        data = Prepare1JH_(molec_struct_map)(data)
+        data = Prepare2JH_(molec_struct_map)(data)
         for col in data.columns:
             print(f'Column: {col}')
             print(data[col].iloc[:5].values)
