@@ -22,6 +22,13 @@ def get_distance(molecule_map, molecule_name, a0, a1):
     return distance_matrix[a0, a1]
 
 
+def get_gasteiger_charge(molecule_map, molecule_name, atom_idx):
+    if atom_idx == -1:
+        return -1000
+    g_charge = molecule_map[molecule_name]['g_charges'][atom_idx]
+    return g_charge
+
+
 def calculate_neighborhood(molecule_map, molecule_name, atom_idx):
     if atom_idx == -1:
         return [-1, -1, -1, -1]
@@ -141,6 +148,11 @@ class FeatureEngineer(object):
             lambda x: get_distance(self.molecule_map, x['molecule_name'], x[atom_i_col], x[atom_j_col]), axis=1)
         return df
 
+    def get_gasteiger_charges(self, df, atom_idx_col, col_name):
+        df[col_name] = df.apply(
+            lambda x: get_gasteiger_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+        return df
+
     def get_neighbors(self, df, atom_idx_col, col_names):
         neighbors = df.apply(
             lambda x: calculate_neighborhood(self.molecule_map, x['molecule_name'], x[atom_idx_col]),
@@ -163,6 +175,10 @@ class FeatureEngineer(object):
         df = pd.concat([df, elements], axis=1)
         return df
 
+    @staticmethod
+    def feature_cols():
+        return ['distance', 'gcharge_0', 'gcharge_1']
+
     def __call__(self, df):
         """Get the distance between the atom pairs
 
@@ -174,7 +190,10 @@ class FeatureEngineer(object):
         -------
         pd.DataFrame
         """
-        return self.get_distances(df, 'atom_index_0', 'atom_index_1', 'distance')
+        df = self.get_distances(df, 'atom_index_0', 'atom_index_1', 'distance')
+        df = self.get_gasteiger_charges(df, 'atom_index_0', 'gcharge_0')
+        df = self.get_gasteiger_charges(df, 'atom_index_1', 'gcharge_1')
+        return df
 
 
 class Prepare1JH_(FeatureEngineer):
@@ -188,8 +207,8 @@ class Prepare1JH_(FeatureEngineer):
 
     @staticmethod
     def feature_cols():
-        return ['distance', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'F_neighbors',
-                'sp', 'sp2', 'sp3']
+        return FeatureEngineer.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'sp',
+                                                 'sp2', 'sp3']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -214,13 +233,14 @@ class Prepare2JHH(FeatureEngineer):
     - element of X
     - neighbors of X
     - hybridization of X
+    - gasteiger charges of H0, X, and H1
     """
 
     @staticmethod
     def feature_cols():
-        return ['distance', 'distance_hx', 'x_nitrogen', 'x_oxygen',
-                'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors', 'x_F_neighbors',
-                'x_sp', 'x_sp2', 'x_sp3']
+        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen', 'x_H_neighbors',
+                                                 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -245,6 +265,9 @@ class Prepare2JHH(FeatureEngineer):
         hybrid_cols = ['x_sp', 'x_sp2', 'x_sp3']
         df = self.get_hybridizations(df, 'atom_index_x', hybrid_cols)
 
+        # get the gasteiger charge of middle atom X
+        df = self.get_gasteiger_charges(df, 'atom_index_x', 'gcharge_x')
+
         return df
 
 
@@ -253,15 +276,16 @@ class Prepare2JH_(Prepare2JHH):
 
     Features:
     - all features from the 2JHH feature engineer
-    - distance from X to C/H
-    - neighbors of C/H
-    - hybridization of C/H
+    - distance from X to C/N
+    - neighbors of C/N
+    - hybridization of C/N
+    - gasteiger charges of H, X, and C/N
     """
 
     @staticmethod
     def feature_cols():
         base_cols = Prepare2JHH.feature_cols()
-        return base_cols + ['distance_x_', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'F_neighbors',
+        return base_cols + ['distance_x_', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
                             'sp', 'sp2', 'sp3']
 
     def __call__(self, df):
@@ -294,6 +318,7 @@ class Prepare3JHH(FeatureEngineer):
     - neighbors of Y
     - hybridization of X
     - hybridization of Y
+    - gasteiger charges of H0, X, Y, H1
     - dihedral angle
     - cos(theta)
     - cos(2*theta)
@@ -301,12 +326,13 @@ class Prepare3JHH(FeatureEngineer):
 
     @staticmethod
     def feature_cols():
-        return ['distance', 'distance_0x', 'distance_xy', 'distance_y1', 'distance_0y', 'distance_x1',
-                'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
-                'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors', 'x_F_neighbors',
-                'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors', 'y_F_neighbors',
-                'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3',
-                'dihedral', 'cos_theta', 'cos_2theta']
+        return FeatureEngineer.feature_cols() + ['distance', 'distance_0x', 'distance_xy',
+                                                 'distance_y1', 'distance_0y', 'distance_x1',
+                                                 'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
+                                                 'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
+                                                 'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3',
+                                                 'gcharge_x', 'gcharge_y', 'dihedral', 'cos_theta', 'cos_2theta']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -340,6 +366,9 @@ class Prepare3JHH(FeatureEngineer):
         df = self.get_hybridizations(df, 'atom_index_x', x_hybrid_cols)
         df = self.get_hybridizations(df, 'atom_index_y', y_hybrid_cols)
 
+        df = self.get_gasteiger_charges(df, 'atom_index_x', 'gcharge_x')
+        df = self.get_gasteiger_charges(df, 'atom_index_y', 'gcharge_y')
+
         df = calculate_dihedral_angles(df, self.molecule_map, 'atom_index_0',
                                        'atom_index_x', 'atom_index_y', 'atom_index_1')
 
@@ -361,7 +390,7 @@ class Prepare3JH_(Prepare3JHH):
 
     @staticmethod
     def feature_cols():
-        return Prepare3JHH.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'F_neighbors',
+        return Prepare3JHH.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
                                              'sp', 'sp2', 'sp3']
 
     def __call__(self, df):
