@@ -29,6 +29,15 @@ def get_gasteiger_charge(molecule_map, molecule_name, atom_idx):
     return g_charge
 
 
+def get_ring_membership(molecule_map, molecule_name, atom_idx):
+    if atom_idx == -1:
+        return -1
+    molecule = molecule_map[molecule_name]['rdkit']
+    atom = molecule.GetAtomWithIdx(atom_idx)
+    in_ring = int(atom.IsInRing())
+    return in_ring
+
+
 def calculate_neighborhood(molecule_map, molecule_name, atom_idx):
     if atom_idx == -1:
         return [-1, -1, -1, -1]
@@ -153,6 +162,11 @@ class FeatureEngineer(object):
             lambda x: get_gasteiger_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
         return df
 
+    def is_in_ring(self, df, atom_idx_col, col_name):
+        df[col_name] = df.apply(
+            lambda x: get_ring_membership(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+        return df
+
     def get_neighbors(self, df, atom_idx_col, col_names):
         neighbors = df.apply(
             lambda x: calculate_neighborhood(self.molecule_map, x['molecule_name'], x[atom_idx_col]),
@@ -162,8 +176,8 @@ class FeatureEngineer(object):
         return df
 
     def get_hybridizations(self, df, atom_idx_col, col_names):
-        hybridizations = df.apply(lambda x: find_hybridization(self.molecule_map, x['molecule_name'], x[atom_idx_col]),
-                                  axis=1)
+        hybridizations = df.apply(
+            lambda x: find_hybridization(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
         hybridizations = pd.DataFrame(hybridizations.values.tolist(), columns=col_names)
         df = pd.concat([df, hybridizations], axis=1)
         return df
@@ -203,12 +217,13 @@ class Prepare1JH_(FeatureEngineer):
     - distance of H-C (or H-N)
     - C neighbors (or N neighbors)
     - C hybridization (or N hybridization)
+    - ring membership of the C/N atom
     """
 
     @staticmethod
     def feature_cols():
-        return FeatureEngineer.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'sp',
-                                                 'sp2', 'sp3']
+        return FeatureEngineer.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
+                                                 'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -220,6 +235,9 @@ class Prepare1JH_(FeatureEngineer):
         # get the hybridization
         hybrid_cols = ['sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
+
+        # is the C/N atom in a ring?
+        df = self.is_in_ring(df, 'atom_index_1', 'ring_1')
 
         return df
 
@@ -234,13 +252,14 @@ class Prepare2JHH(FeatureEngineer):
     - neighbors of X
     - hybridization of X
     - gasteiger charges of H0, X, and H1
+    - ring membership of atom X
     """
 
     @staticmethod
     def feature_cols():
         return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen', 'x_H_neighbors',
                                                  'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
-                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x']
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'ring_x']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -268,6 +287,9 @@ class Prepare2JHH(FeatureEngineer):
         # get the gasteiger charge of middle atom X
         df = self.get_gasteiger_charges(df, 'atom_index_x', 'gcharge_x')
 
+        # ring membership of atom X
+        df = self.is_in_ring(df, 'atom_index_x', 'ring_x')
+
         return df
 
 
@@ -280,13 +302,14 @@ class Prepare2JH_(Prepare2JHH):
     - neighbors of C/N
     - hybridization of C/N
     - gasteiger charges of H, X, and C/N
+    - ring membership of C/N
     """
 
     @staticmethod
     def feature_cols():
         base_cols = Prepare2JHH.feature_cols()
         return base_cols + ['distance_x_', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
-                            'sp', 'sp2', 'sp3']
+                            'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -298,6 +321,8 @@ class Prepare2JH_(Prepare2JHH):
 
         hybrid_cols = ['sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
+
+        df = self.is_in_ring(df, 'atom_index_1', 'ring_1')
 
         return df
 
@@ -318,6 +343,7 @@ class Prepare3JHH(FeatureEngineer):
     - neighbors of Y
     - hybridization of X
     - hybridization of Y
+    - ring membership of X, Y
     - gasteiger charges of H0, X, Y, H1
     - dihedral angle
     - cos(theta)
@@ -331,7 +357,7 @@ class Prepare3JHH(FeatureEngineer):
                                                  'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
                                                  'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
                                                  'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
-                                                 'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3',
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3', 'ring_x', 'ring_y',
                                                  'gcharge_x', 'gcharge_y', 'dihedral', 'cos_theta', 'cos_2theta']
 
     def __call__(self, df):
@@ -366,6 +392,9 @@ class Prepare3JHH(FeatureEngineer):
         df = self.get_hybridizations(df, 'atom_index_x', x_hybrid_cols)
         df = self.get_hybridizations(df, 'atom_index_y', y_hybrid_cols)
 
+        df = self.is_in_ring(df, 'atom_index_x', 'ring_x')
+        df = self.is_in_ring(df, 'atom_index_y', 'ring_y')
+
         df = self.get_gasteiger_charges(df, 'atom_index_x', 'gcharge_x')
         df = self.get_gasteiger_charges(df, 'atom_index_y', 'gcharge_y')
 
@@ -386,12 +415,13 @@ class Prepare3JH_(Prepare3JHH):
     Most of the features are the same as for 3JHH. Additionally:
     - neighbors of C/N
     - hybridization of C/N
+    - ring membership of C/N
     """
 
     @staticmethod
     def feature_cols():
         return Prepare3JHH.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
-                                             'sp', 'sp2', 'sp3']
+                                             'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -401,6 +431,8 @@ class Prepare3JH_(Prepare3JHH):
 
         hybrid_cols = ['sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
+
+        df = self.is_in_ring(df, 'atom_index_1', 'ring_1')
 
         return df
 
