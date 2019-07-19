@@ -9,6 +9,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
 from dtsckit.utils import write_pickle
+from pairwise_features import Prepare1JH_, Prepare2JHH, Prepare2JH_, Prepare3JHH, Prepare3JH_
 
 
 def process_filename(filename):
@@ -19,30 +20,22 @@ def process_filename(filename):
 
 
 def get_faulty_pairs(df):
-    mask = (df['p1_C'] == -1)
+    mask = (df['x_nitrogen'] == -1)
     ids = df.loc[mask]['id'].values
     return mask, ids
 
 
-def get_feature_columns(num_hops, h2h):
-    feature_cols = ['distance', 'a0_C', 'a0_N', 'a0_O']
-    if num_hops == 1:
-        feature_cols += ['a1_H', 'a1_C', 'a1_N', 'a1_O', 'a1_F']
-    elif num_hops == 2:
-        if h2h:
-            feature_cols += ['a1_C', 'a1_N', 'a1_O']
-        else:
-            feature_cols += ['a1_H', 'a1_C', 'a1_N', 'a1_O', 'a1_F']
-
-        feature_cols += ['p1_C', 'p1_N', 'p1_O']
-    elif num_hops == 3:
-        if h2h:
-            feature_cols += ['a1_C', 'a1_N', 'a1_O']
-        else:
-            feature_cols += ['a1_H', 'a1_C', 'a1_N', 'a1_O', 'a1_F']
-
-        feature_cols += ['p1_C', 'p1_N', 'p1_O', 'p2_C', 'p2_N', 'p2_O', 'dihedral', 'cos_theta', 'cos_2theta']
-    return feature_cols
+def get_feature_columns(coupling_type):
+    if coupling_type == '1JHC' or coupling_type == '1JHN':
+        return Prepare1JH_.feature_cols()
+    elif coupling_type == '2JHH':
+        return Prepare2JHH.feature_cols()
+    elif coupling_type == '2JHC' or coupling_type == '2JHN':
+        return Prepare2JH_.feature_cols()
+    elif coupling_type == '3JHH':
+        return Prepare3JHH.feature_cols()
+    elif coupling_type == '3JHC' or coupling_type == '3JHN':
+        return Prepare3JH_.feature_cols()
 
 
 if __name__ == '__main__':
@@ -62,7 +55,7 @@ if __name__ == '__main__':
         ###################################### Prepare the training data ###############################################
         start_time = time.time()
         coupling_type, num_hops, h2h = process_filename(filename)
-        print(f'Training model for {coupling_type}')
+        print(f'\nTraining model for {coupling_type}')
         train_df = pd.read_csv(os.path.join(TRAIN_DIR, filename))
 
         if num_hops > 1:
@@ -70,23 +63,24 @@ if __name__ == '__main__':
             train_df = train_df.loc[~faulty_molecule_mask]
             train_df = train_df.reset_index(drop=True)
 
-        feature_columns = get_feature_columns(num_hops, h2h)
+        feature_columns = get_feature_columns(coupling_type)
         x_train = train_df[feature_columns].values
         y_train = train_df['scalar_coupling_constant'].values
         ######################################## Hyperparameter tuning #################################################
-        params = [{'min_samples_leaf': [10, 20, 50],
-                   'max_depth': [3, 5, 8, None],
-                   'max_features': ['sqrt', 0.5]}]
-
-        clf = GridSearchCV(RandomForestRegressor(300), params, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
-        clf.fit(x_train, y_train)
-
-        score = np.log(-1 * clf.best_score_)
-        scores[coupling_type] = score
-        print(f'Log MAE Score: {score}')
-        print(f'Best parameters: {clf.best_params_}')
+        # params = [{'min_samples_leaf': [10, 20, 50],
+        #            'max_depth': [3, 5, 8, None],
+        #            'max_features': ['sqrt', 0.5]}]
+        #
+        # clf = GridSearchCV(RandomForestRegressor(300), params, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
+        # clf.fit(x_train, y_train)
+        #
+        # score = np.log(-1 * clf.best_score_)
+        # scores[coupling_type] = score
+        # print(f'Log MAE Score: {score}')
+        # print(f'Best parameters: {clf.best_params_}')
         ######################################## Train on all the data #################################################
-        model = clf.best_estimator_
+        # model = clf.best_estimator_
+        model = RandomForestRegressor(n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=6)
         model.fit(x_train, y_train)
         models[coupling_type] = model
 
