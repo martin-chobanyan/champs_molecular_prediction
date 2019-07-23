@@ -22,8 +22,7 @@ def split_by_types(df, dir):
         data.to_csv(filepath, index=False)
 
 
-def visualize_molecule(molecule_structures, name):
-    molecule = molecule_structures[name]
+def visualize_molecule(molecule):
     symbols = molecule['symbols']
     coords = molecule['coords']
     system = ase.Atoms(positions=coords, symbols=symbols)
