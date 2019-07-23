@@ -4,7 +4,46 @@
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 import torch
+import rdkit.Chem.rdMolDescriptors as rdMD
 from chem_math import angle_between, find_atomic_path
+
+
+def calculate_scalar_descriptors(molecule, symbols):
+    features = []
+    features.append(rdMD.CalcAsphericity(molecule))
+    features += list(rdMD.CalcCrippenDescriptors(molecule))
+    features.append(rdMD.CalcExactMolWt(molecule))
+    features.append(rdMD.CalcEccentricity(molecule))
+    features.append(rdMD.CalcFractionCSP3(molecule))
+    features.append(rdMD.CalcLabuteASA(molecule))
+    features.append(rdMD.CalcNPR1(molecule))
+    features.append(rdMD.CalcNPR2(molecule))
+    features.append(rdMD.CalcHallKierAlpha(molecule))
+
+    # elemental distribution
+    symbols = np.array(symbols)
+    features.append(np.sum(symbols == 'H'))
+    features.append(np.sum(symbols == 'C'))
+    features.append(np.sum(symbols == 'N'))
+    features.append(np.sum(symbols == 'O'))
+    features.append(np.sum(symbols == 'F'))
+
+    # ring features
+    features.append(rdMD.CalcNumAliphaticCarbocycles(molecule))
+    features.append(rdMD.CalcNumAliphaticHeterocycles(molecule))
+    features.append(rdMD.CalcNumAromaticCarbocycles(molecule))
+    features.append(rdMD.CalcNumAromaticHeterocycles(molecule))
+    features.append(rdMD.CalcNumSaturatedCarbocycles(molecule))
+    features.append(rdMD.CalcNumSaturatedHeterocycles(molecule))
+    features.append(rdMD.CalcNumSpiroAtoms(molecule))  # atom shared between rings with one bond
+    features.append(rdMD.CalcNumBridgeheadAtoms(molecule))  # atom shared between rings with at least two bonds
+
+    # other counts
+    features.append(rdMD.CalcNumAmideBonds(molecule))
+    features.append(rdMD.CalcNumHBA(molecule))  # number of hydrogen acceptors
+    features.append(rdMD.CalcNumHBD(molecule))  # number of hydrogen donors
+
+    return np.array(features)
 
 
 def get_unique_hybridizations(molec_struct_map):
