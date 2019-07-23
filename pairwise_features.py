@@ -6,30 +6,9 @@ import re
 from argparse import ArgumentParser
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from dtsckit.plot import CustomPlotSize
+
 from dtsckit.utils import read_pickle
 from chem_math import find_atomic_path, vectorized_dihedral_angle
-
-
-########################################################################################################################
-#                                             Feature Visualization
-########################################################################################################################
-
-def plot_karplus(df, coupling, plot_size=(10, 8), num_points=100000):
-    if len(df) > num_points:
-        df = df[:num_points]
-    with CustomPlotSize(*plot_size):
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(df['cos_theta'][:100000],
-                   df['cos_2theta'][:100000],
-                   df['scalar_coupling_constant'][:100000], alpha=0.8)
-        ax.set_title(coupling)
-        ax.set_xlabel('Cosine(dihedral)')
-        ax.set_ylabel('Cosine(2*dihedral)')
-        ax.set_zlabel('Scalar Coupling Constant')
-        plt.show()
 
 
 ########################################################################################################################
@@ -49,6 +28,13 @@ def get_gasteiger_charge(molecule_map, molecule_name, atom_idx):
         return -1000
     g_charge = molecule_map[molecule_name]['g_charges'][atom_idx]
     return g_charge
+
+
+def get_eem_charge(molecule_map, molecule_name, atom_idx):
+    if atom_idx == -1:
+        return -1000
+    eem_charge = molecule_map[molecule_name]['eem_charges'][atom_idx]
+    return eem_charge
 
 
 def get_ring_membership(molecule_map, molecule_name, atom_idx):
@@ -173,6 +159,7 @@ class FeatureEngineer(object):
 
     def __init__(self, molecule_map):
         self.molecule_map = molecule_map
+        self.scalar_col_names = molecule_map['scalar_descriptor_keys']
 
     def get_distances(self, df, atom_i_col, atom_j_col, col_name):
         df[col_name] = df.apply(
@@ -182,6 +169,11 @@ class FeatureEngineer(object):
     def get_gasteiger_charges(self, df, atom_idx_col, col_name):
         df[col_name] = df.apply(
             lambda x: get_gasteiger_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+        return df
+
+    def get_eem_charges(self, df, atom_idx_col, col_name):
+        df[col_name] = df.apply(
+            lambda x: get_eem_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
         return df
 
     def is_in_ring(self, df, atom_idx_col, col_name):
@@ -211,9 +203,25 @@ class FeatureEngineer(object):
         df = pd.concat([df, elements], axis=1)
         return df
 
+    def get_scalar_descriptors(self, df):
+        scalar_descriptors = df.apply(lambda x: self.molecule_map[x['molecule_name']]['scalar_descriptors'], axis=1)
+        scalar_descriptors = pd.DataFrame(scalar_descriptors.values.tolist(), columns=self.scalar_col_names)
+        df = pd.concat([df, scalar_descriptors], axis=1)
+        return df
+
     @staticmethod
     def feature_cols():
-        return ['distance', 'gcharge_0', 'gcharge_1']
+        scalar_descriptor_keys = ['asphericity', 'crippen_log', 'crippen_mr',
+                                  'weight', 'eccentricity', 'fraction_csp3',
+                                  'surface_area', 'npr1', 'npr2', 'hall_kier_alpha',
+                                  'num_H', 'num_C', 'num_N', 'num_O', 'num_F',
+                                  'num_aliphatic_carbocycles', 'num_aliphatic_heterocycles',
+                                  'num_aromatic_carbocycles', 'num_aromatic_heterocycles',
+                                  'num_saturated_carbocycles', 'num_saturated_heterocycles',
+                                  'num_spiro_atoms', 'num_bridgehead_atoms', 'num_amide_bonds',
+                                  'num_H_acceptors', 'num_H_donors']
+
+        return ['distance', 'gcharge_0', 'gcharge_1', 'eem_charge_0', 'eem_charge_1'] + scalar_descriptor_keys
 
     def __call__(self, df):
         """Get the distance between the atom pairs
@@ -229,6 +237,9 @@ class FeatureEngineer(object):
         df = self.get_distances(df, 'atom_index_0', 'atom_index_1', 'distance')
         df = self.get_gasteiger_charges(df, 'atom_index_0', 'gcharge_0')
         df = self.get_gasteiger_charges(df, 'atom_index_1', 'gcharge_1')
+        df = self.get_eem_charges(df, 'atom_index_0', 'eem_charge_0')
+        df = self.get_eem_charges(df, 'atom_index_1', 'eem_charge_1')
+        df = self.get_scalar_descriptors(df)
         return df
 
 
@@ -274,14 +285,15 @@ class Prepare2JHH(FeatureEngineer):
     - neighbors of X
     - hybridization of X
     - gasteiger charges of H0, X, and H1
+    - eem charges of H0, X, and H1
     - ring membership of atom X
     """
 
     @staticmethod
     def feature_cols():
-        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen', 'x_H_neighbors',
-                                                 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
-                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'ring_x']
+        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen',
+                                                 'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'eem_charge_x', 'ring_x']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -308,6 +320,9 @@ class Prepare2JHH(FeatureEngineer):
 
         # get the gasteiger charge of middle atom X
         df = self.get_gasteiger_charges(df, 'atom_index_x', 'gcharge_x')
+
+        # get the eem charge of middle atom X
+        df = self.get_eem_charges(df, 'atom_index_x', 'eem_charge_x')
 
         # ring membership of atom X
         df = self.is_in_ring(df, 'atom_index_x', 'ring_x')
@@ -367,6 +382,7 @@ class Prepare3JHH(FeatureEngineer):
     - hybridization of Y
     - ring membership of X, Y
     - gasteiger charges of H0, X, Y, H1
+    - eem charges of H0, X, Y, H1
     - dihedral angle
     - cos(theta)
     - cos(2*theta)
@@ -380,7 +396,8 @@ class Prepare3JHH(FeatureEngineer):
                                                  'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
                                                  'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
                                                  'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3', 'ring_x', 'ring_y',
-                                                 'gcharge_x', 'gcharge_y', 'dihedral', 'cos_theta', 'cos_2theta']
+                                                 'gcharge_x', 'gcharge_y', 'eem_charge_x', 'eem_charge_y',
+                                                 'dihedral', 'cos_theta', 'cos_2theta']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -419,6 +436,9 @@ class Prepare3JHH(FeatureEngineer):
 
         df = self.get_gasteiger_charges(df, 'atom_index_x', 'gcharge_x')
         df = self.get_gasteiger_charges(df, 'atom_index_y', 'gcharge_y')
+
+        df = self.get_eem_charges(df, 'atom_index_x', 'eem_charge_x')
+        df = self.get_eem_charges(df, 'atom_index_y', 'eem_charge_y')
 
         df = calculate_dihedral_angles(df, self.molecule_map, 'atom_index_0',
                                        'atom_index_x', 'atom_index_y', 'atom_index_1')
@@ -473,7 +493,7 @@ if __name__ == '__main__':
     molec_struct_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
 
     for filename in os.listdir(TARGET_DIR):
-        data = pd.read_csv(os.path.join(TARGET_DIR, filename))
+        data = pd.read_csv(os.path.join(TARGET_DIR, filename)).head(100)
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
         print(f'Coupling: {coupling_type}')
 
@@ -490,6 +510,10 @@ if __name__ == '__main__':
         else:
             raise ValueError(f"Unexpected coupling type: '{coupling_type}'")
 
-        print('Saving the file...\n')
-        data.to_csv(os.path.join(TARGET_DIR, filename), index=False)
-    print('Done!')
+        print(data.head())
+        print(data.columns)
+        print()
+
+        # print('Saving the file...\n')
+        # data.to_csv(os.path.join(TARGET_DIR, filename), index=False)
+    # print('Done!')
