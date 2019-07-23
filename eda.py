@@ -3,9 +3,10 @@
 
 import os
 import pandas as pd
+import matplotlib.pyplot as plt
 import ase
 import ase.visualize
-
+from dtsckit.plot import CustomPlotSize
 
 def find_unique_elements(molec_struct_map):
     """Return a set of all elements used in the molecules"""
@@ -27,6 +28,23 @@ def visualize_molecule(molecule):
     coords = molecule['coords']
     system = ase.Atoms(positions=coords, symbols=symbols)
     return ase.visualize.view(system, viewer="x3d")
+
+
+def plot_karplus(df, coupling, plot_size=(10, 8), num_points=100000):
+    if len(df) > num_points:
+        df = df[:num_points]
+    with CustomPlotSize(*plot_size):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(df['cos_theta'][:100000],
+                   df['cos_2theta'][:100000],
+                   df['scalar_coupling_constant'][:100000], alpha=0.8)
+        ax.set_title(coupling)
+        ax.set_xlabel('Cosine(dihedral)')
+        ax.set_ylabel('Cosine(2*dihedral)')
+        ax.set_zlabel('Scalar Coupling Constant')
+        plt.show()
+
 
 if __name__ == '__main__':
     ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
