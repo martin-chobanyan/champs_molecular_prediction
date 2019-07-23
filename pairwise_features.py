@@ -482,7 +482,7 @@ if __name__ == '__main__':
     molec_struct_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
 
     for filename in os.listdir(TARGET_DIR):
-        data = pd.read_csv(os.path.join(TARGET_DIR, filename)).head(100)
+        data = pd.read_csv(os.path.join(TARGET_DIR, filename))
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
         print(f'Coupling: {coupling_type}')
 
@@ -499,10 +499,6 @@ if __name__ == '__main__':
         else:
             raise ValueError(f"Unexpected coupling type: '{coupling_type}'")
 
-        print(data.head())
-        print(data.columns)
-        print()
-
-        # print('Saving the file...\n')
-        # data.to_csv(os.path.join(TARGET_DIR, filename), index=False)
-    # print('Done!')
+        print('Saving the file...\n')
+        data.to_csv(os.path.join(TARGET_DIR, filename), index=False)
+    print('Done!')
