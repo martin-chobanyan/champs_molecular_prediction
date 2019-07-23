@@ -50,6 +50,7 @@ if __name__ == '__main__':
 
     models = dict()
     scores = dict()
+    feature_importances = dict()
     total_time = 0
     for filename in os.listdir(TRAIN_DIR):
         ###################################### Prepare the training data ###############################################
@@ -80,13 +81,15 @@ if __name__ == '__main__':
         # print(f'Best parameters: {clf.best_params_}')
         ######################################## Train on all the data #################################################
         # model = clf.best_estimator_
-        model = RandomForestRegressor(n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=6)
+        model = RandomForestRegressor(n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10)
         model.fit(x_train, y_train)
         models[coupling_type] = model
 
         print('Feature importances:')
+        feature_importances[coupling_type] = dict()
         for feature, importance in zip(feature_columns, model.feature_importances_):
             print(f'{feature}: {importance}')
+            feature_importances[coupling_type][feature] = importance
         ###################################### Prepare the testing data ################################################
         test_df = pd.read_csv(os.path.join(TEST_DIR, filename))
 
@@ -110,5 +113,6 @@ if __name__ == '__main__':
     print('\nSaving the submissions...')
     write_pickle(models, os.path.join(ROOT_DIR, 'rf_models.pkl'))
     write_pickle(scores, os.path.join(ROOT_DIR, 'rf_scores.pkl'))
+    write_pickle(feature_importances, os.path.join(ROOT_DIR, 'rf_feature_importance.pkl'))
     submission_df.to_csv(submission_filepath, index=False)
     print('Done!')
