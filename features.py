@@ -4,37 +4,67 @@
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 import torch
+from rdkit.Chem import Mol
 import rdkit.Chem.rdMolDescriptors as rdMD
-from chem_math import angle_between, find_atomic_path
 
 
-def calculate_coulomb_matrix(molecule):
+########################################################################################################################
+#                                     Define matrix representations of molecules
+########################################################################################################################
+
+
+def calculate_connectivity_matrix(molecule, bond_order_map):
+    """Calculates a 2D adjacency matrix weighted by bond orders
+
+    Parameters
+    ----------
+    molecule: Mol
+    bond_order_map: dict[str, float]
+
+    Returns
+    -------
+    np.ndarray
+    """
+    num_atoms = molecule.GetNumAtoms()
+    adjacency = np.zeros((num_atoms, num_atoms))
+    for bond in molecule.GetBonds():
+        bond_type = str(bond.GetBondType())
+        bond_order = bond_order_map[bond_type]
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+        adjacency[i, j] = bond_order
+        adjacency[j, i] = bond_order
+    return adjacency
+
+
+def calculate_coulomb_matrix(molecule, distance_matrix):
     """Calculate the Coulomb matrix of the given molecule
 
     Parameters
     ----------
-    molecule: dict
-        A dictionary with keys for 'distance_matrix', 'symbols', and 'rdkit' (maps to the rdkit object for the molecule)
+    molecule: Mol
+    distance_matrix: np.ndarray
 
     Returns
     -------
     np.ndarray
         A 2D array with the atom-atom coulomb interactions
     """
-    m = molecule['rdkit']
-    distances = molecule['distance_matrix']
-    num_atoms = len(molecule['symbols'])
-    charges = [atom.GetAtomicNum() for atom in m.GetAtoms()]
-
+    num_atoms = molecule.GetNumAtoms()
+    charges = [atom.GetAtomicNum() for atom in molecule.GetAtoms()]
     coulomb = np.zeros((num_atoms, num_atoms))
     for i in range(num_atoms):
         for j in range(num_atoms):
             if i == j:
                 coulomb[i, j] = 0.5 * (charges[i] ** 2.4)
             else:
-                coulomb[i, j] = (charges[i] * charges[j]) / distances[i, j]
-
+                coulomb[i, j] = (charges[i] * charges[j]) / distance_matrix[i, j]
     return coulomb
+
+
+########################################################################################################################
+#                                       Define molecular feature vectors
+########################################################################################################################
 
 
 def calculate_scalar_descriptors(molecule, symbols):
@@ -75,14 +105,9 @@ def calculate_scalar_descriptors(molecule, symbols):
     return np.array(features)
 
 
-def get_unique_hybridizations(molec_struct_map):
-    hybridization_set = set()
-    for name in molec_struct_map:
-        molecule_dict = molec_struct_map[name]
-        molecule = molecule_dict['rdkit']
-        h = [str(atom.GetHybridization()) for atom in molecule.GetAtoms()]
-        hybridization_set.update(h)
-    return hybridization_set
+########################################################################################################################
+#                                          Define the bond features
+########################################################################################################################
 
 
 def get_edge_index(molecule):
@@ -109,6 +134,11 @@ def get_edge_attributes(molecule, dist_mtrx):
     return edge_attributes
 
 
+########################################################################################################################
+#                                           Miscellaneous routines
+########################################################################################################################
+
+
 class ElementEncoder(object):
     """One-hot encode the elements used in molecules"""
 
@@ -128,68 +158,11 @@ class ElementEncoder(object):
         return encoding
 
 
-# OLD CODE:
-def extract_basic_features(name, a0, a1, molec_struct_map, bond_separation=1):
-    # H, C, N, O, F, distance
-    num_features = 6 + (bond_separation - 1)
-    features = np.zeros(num_features)
-
-    molecule_struct = molec_struct_map[name]
-    neighbors = set(molecule_struct[a0]['bonds'] + molecule_struct[a1]['bonds'])
-    for neighbor_atom in neighbors:
-        symbol = molecule_struct[neighbor_atom]['atom']
-        if symbol == 'H':
-            i = 0
-        elif symbol == 'C':
-            i = 1
-        elif symbol == 'N':
-            i = 2
-        elif symbol == 'O':
-            i = 3
-        elif symbol == 'F':
-            i = 4
-        else:
-            raise ValueError(f'New element encountered: {symbol}')
-        features[i] += 1
-
-    try:
-        d = 0
-        atomic_path = find_atomic_path(molecule_struct, a0, a1, k=bond_separation)
-        for start, end in zip(atomic_path[:-1], atomic_path[1:]):
-            d += np.linalg.norm(molecule_struct[start]['coord'] - molecule_struct[end]['coord'])
-        features[5] = d
-    except IndexError:
-        atomic_path = None
-
-    if atomic_path is not None:
-        if bond_separation == 2:
-            a1, a2, a3 = atomic_path
-            p1 = molecule_struct[a1]['coord']
-            p2 = molecule_struct[a2]['coord']
-            p3 = molecule_struct[a3]['coord']
-            features[6] = angle_between(p1 - p2, p3 - p2)
-
-        elif bond_separation == 3:
-            a1, a2, a3, a4 = atomic_path
-            p1 = molecule_struct[a1]['coord']
-            p2 = molecule_struct[a2]['coord']
-            p3 = molecule_struct[a3]['coord']
-            p4 = molecule_struct[a4]['coord']
-
-            features[6] = angle_between(p1 - p2, p3 - p2)
-            features[7] = angle_between(p2 - p3, p4 - p3)
-
-    return features
-
-
-def calculate_more_features(coupling_data, coupling_type, molec_struct_map):
-    features = []
-    bond_separation = int(coupling_type[0])
-    for i, (name, a0, a1) in enumerate(zip(coupling_data['molecule_name'],
-                                           coupling_data['atom_index_0'],
-                                           coupling_data['atom_index_1'])):
-        f = extract_basic_features(name, a0, a1, molec_struct_map, bond_separation)
-        features.append(f)
-
-    features = np.stack(features)
-    return features
+def get_unique_hybridizations(molec_struct_map):
+    hybridization_set = set()
+    for name in molec_struct_map:
+        molecule_dict = molec_struct_map[name]
+        molecule = molecule_dict['rdkit']
+        h = [str(atom.GetHybridization()) for atom in molecule.GetAtoms()]
+        hybridization_set.update(h)
+    return hybridization_set
