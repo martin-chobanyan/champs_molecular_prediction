@@ -8,6 +8,35 @@ import rdkit.Chem.rdMolDescriptors as rdMD
 from chem_math import angle_between, find_atomic_path
 
 
+def calculate_coulomb_matrix(molecule):
+    """Calculate the Coulomb matrix of the given molecule
+
+    Parameters
+    ----------
+    molecule: dict
+        A dictionary with keys for 'distance_matrix', 'symbols', and 'rdkit' (maps to the rdkit object for the molecule)
+
+    Returns
+    -------
+    np.ndarray
+        A 2D array with the atom-atom coulomb interactions
+    """
+    m = molecule['rdkit']
+    distances = molecule['distance_matrix']
+    num_atoms = len(molecule['symbols'])
+    charges = [atom.GetAtomicNum() for atom in m.GetAtoms()]
+
+    coulomb = np.zeros((num_atoms, num_atoms))
+    for i in range(num_atoms):
+        for j in range(num_atoms):
+            if i == j:
+                coulomb[i, j] = 0.5 * (charges[i] ** 2.4)
+            else:
+                coulomb[i, j] = (charges[i] * charges[j]) / distances[i, j]
+
+    return coulomb
+
+
 def calculate_scalar_descriptors(molecule, symbols):
     features = []
     features.append(rdMD.CalcAsphericity(molecule))
