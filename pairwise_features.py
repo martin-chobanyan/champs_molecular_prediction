@@ -209,8 +209,19 @@ class FeatureEngineer(object):
         df = pd.concat([df, scalar_descriptors], axis=1)
         return df
 
-    def base_feature_cols(self):
-        return ['distance', 'gcharge_0', 'gcharge_1', 'eem_charge_0', 'eem_charge_1'] + self.scalar_col_names
+    @staticmethod
+    def feature_cols():
+        scalar_descriptor_cols = ['asphericity', 'crippen_log', 'crippen_mr',
+                                  'weight', 'eccentricity', 'fraction_csp3',
+                                  'surface_area', 'npr1', 'npr2', 'hall_kier_alpha',
+                                  'num_H', 'num_C', 'num_N', 'num_O', 'num_F',
+                                  'num_aliphatic_carbocycles', 'num_aliphatic_heterocycles',
+                                  'num_aromatic_carbocycles', 'num_aromatic_heterocycles',
+                                  'num_saturated_carbocycles', 'num_saturated_heterocycles',
+                                  'num_spiro_atoms', 'num_bridgehead_atoms', 'num_amide_bonds',
+                                  'num_H_acceptors', 'num_H_donors']
+
+        return ['distance', 'gcharge_0', 'gcharge_1', 'eem_charge_0', 'eem_charge_1'] + scalar_descriptor_cols
 
     def __call__(self, df):
         """Get the distance between the atom pairs
@@ -244,8 +255,8 @@ class Prepare1JH_(FeatureEngineer):
 
     @staticmethod
     def feature_cols():
-        return super().base_feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
-                                              'sp', 'sp2', 'sp3', 'ring_1']
+        return FeatureEngineer.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
+                                                 'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -280,9 +291,9 @@ class Prepare2JHH(FeatureEngineer):
 
     @staticmethod
     def feature_cols():
-        return super().base_feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen',
-                                              'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
-                                              'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'eem_charge_x', 'ring_x']
+        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen',
+                                                 'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'eem_charge_x', 'ring_x']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -379,14 +390,14 @@ class Prepare3JHH(FeatureEngineer):
 
     @staticmethod
     def feature_cols():
-        return super().base_feature_cols() + ['distance_0x', 'distance_xy',
-                                              'distance_y1', 'distance_0y', 'distance_x1',
-                                              'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
-                                              'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
-                                              'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
-                                              'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3', 'ring_x', 'ring_y',
-                                              'gcharge_x', 'gcharge_y', 'eem_charge_x', 'eem_charge_y',
-                                              'dihedral', 'cos_theta', 'cos_2theta']
+        return FeatureEngineer.feature_cols() + ['distance_0x', 'distance_xy',
+                                                 'distance_y1', 'distance_0y', 'distance_x1',
+                                                 'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
+                                                 'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
+                                                 'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
+                                                 'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3', 'ring_x', 'ring_y',
+                                                 'gcharge_x', 'gcharge_y', 'eem_charge_x', 'eem_charge_y',
+                                                 'dihedral', 'cos_theta', 'cos_2theta']
 
     def __call__(self, df):
         df = super().__call__(df)
