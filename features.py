@@ -13,13 +13,12 @@ import rdkit.Chem.rdMolDescriptors as rdMD
 ########################################################################################################################
 
 
-def calculate_connectivity_matrix(molecule, bond_order_map):
+def calculate_connectivity_matrix(molecule):
     """Calculates a 2D adjacency matrix weighted by bond orders
 
     Parameters
     ----------
     molecule: Mol
-    bond_order_map: dict[str, float]
 
     Returns
     -------
@@ -28,8 +27,18 @@ def calculate_connectivity_matrix(molecule, bond_order_map):
     num_atoms = molecule.GetNumAtoms()
     adjacency = np.zeros((num_atoms, num_atoms))
     for bond in molecule.GetBonds():
-        bond_type = str(bond.GetBondType())
-        bond_order = bond_order_map[bond_type]
+        bond_type = str(bond.GetBondType()).lower()
+        if bond_type == 'single':
+            bond_order = 1
+        elif bond_type == 'aromatic':
+            bond_order = 1.5
+        elif bond_type == 'double':
+            bond_order = 2
+        elif bond_type == 'triple':
+            bond_order = 3
+        else:
+            raise ValueError(f'Unexpected bond type: {bond_type.upper()}')
+
         i = bond.GetBeginAtomIdx()
         j = bond.GetEndAtomIdx()
         adjacency[i, j] = bond_order
