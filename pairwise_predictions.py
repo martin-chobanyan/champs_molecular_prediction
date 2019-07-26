@@ -111,8 +111,8 @@ if __name__ == '__main__':
 
     print(f'\nTotal time elapsed: {total_time} hours')
     print('\nSaving the submissions...')
-    write_pickle(models, os.path.join(ROOT_DIR, 'rf_models.pkl'))
-    write_pickle(scores, os.path.join(ROOT_DIR, 'rf_scores.pkl'))
-    write_pickle(feature_importances, os.path.join(ROOT_DIR, 'rf_feature_importance.pkl'))
+    write_pickle(models, os.path.join(ROOT_DIR, 'models/pairwise/rf_models.pkl'))
+    write_pickle(scores, os.path.join(ROOT_DIR, 'models/pairwise/rf_scores.pkl'))
+    write_pickle(feature_importances, os.path.join(ROOT_DIR, 'models/pairwise/rf_feature_importance.pkl'))
     submission_df.to_csv(submission_filepath, index=False)
     print('Done!')
