@@ -13,8 +13,51 @@ import rdkit.Chem.rdMolDescriptors as rdMD
 ########################################################################################################################
 
 
-def calculate_connectivity_matrix(molecule):
+def get_bond_order(bond_type):
+    """Map the bond_type string to its bond order"""
+    if bond_type == 'single':
+        return 1
+    elif bond_type == 'aromatic':
+        return 1.5
+    elif bond_type == 'double':
+        return 2
+    elif bond_type == 'triple':
+        return 3
+    else:
+        raise ValueError(f'Unexpected bond type: {bond_type.upper()}')
+
+
+def calculate_connectivity_matrix(molecule, element_diagonal=False):
     """Calculates a 2D adjacency matrix weighted by bond orders
+
+    Parameters
+    ----------
+    molecule: Mol
+    element_diagonal: bool
+        If true, then the atomic numbers of each node will be included in the diagonal (default=False).
+
+    Returns
+    -------
+    np.ndarray
+    """
+    num_atoms = molecule.GetNumAtoms()
+    adjacency = np.zeros((num_atoms, num_atoms))
+    for bond in molecule.GetBonds():
+        bond_type = str(bond.GetBondType()).lower()
+        bond_order = get_bond_order(bond_type)
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+        adjacency[i, j] = bond_order
+        adjacency[j, i] = bond_order
+    if element_diagonal:
+        for i, atom in enumerate(molecule.GetAtoms()):
+            adjacency[i, i] = atom.GetAtomicNum()
+    return adjacency
+
+
+def calculate_cep_matrix(molecule):
+    """Calculates the weighted electronic connectivity (CEP) matrix
+    Source: http://revroum.lew.ro/wp-content/uploads/2006/RRC_11_2006/art10Berinde.pdf
 
     Parameters
     ----------
@@ -25,25 +68,21 @@ def calculate_connectivity_matrix(molecule):
     np.ndarray
     """
     num_atoms = molecule.GetNumAtoms()
-    adjacency = np.zeros((num_atoms, num_atoms))
+    charges = [atom.GetAtomicNum() for atom in molecule.GetAtoms()]
+    cep_matrix = np.zeros((num_atoms, num_atoms))
     for bond in molecule.GetBonds():
         bond_type = str(bond.GetBondType()).lower()
-        if bond_type == 'single':
-            bond_order = 1
-        elif bond_type == 'aromatic':
-            bond_order = 1.5
-        elif bond_type == 'double':
-            bond_order = 2
-        elif bond_type == 'triple':
-            bond_order = 3
-        else:
-            raise ValueError(f'Unexpected bond type: {bond_type.upper()}')
-
+        bond_order = get_bond_order(bond_type)
         i = bond.GetBeginAtomIdx()
         j = bond.GetEndAtomIdx()
-        adjacency[i, j] = bond_order
-        adjacency[j, i] = bond_order
-    return adjacency
+        degree_i = len(molecule.GetAtomWithIdx(i).GetNeighbors())
+        degree_j = len(molecule.GetAtomWithIdx(j).GetNeighbors())
+        z_i = degree_i * charges[i]
+        z_j = degree_j * charges[j]
+        weighted_electronic_distance = ((z_i + z_j) / (bond_order * degree_i * degree_j))
+        cep_matrix[i, j] = weighted_electronic_distance
+        cep_matrix[j, i] = weighted_electronic_distance
+    return cep_matrix
 
 
 def calculate_coulomb_matrix(molecule, distance_matrix):
@@ -65,7 +104,7 @@ def calculate_coulomb_matrix(molecule, distance_matrix):
     for i in range(num_atoms):
         for j in range(num_atoms):
             if i == j:
-                coulomb[i, j] = 0.5 * (charges[i] ** 2.4)
+                coulomb[i, i] = 0.5 * (charges[i] ** 2.4)
             else:
                 coulomb[i, j] = (charges[i] * charges[j]) / distance_matrix[i, j]
     return coulomb

@@ -5,14 +5,14 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from tqdm import tqdm_notebook
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from dtsckit.metrics import AverageKeeper
 from dtsckit.utils import read_pickle
-from features import calculate_coulomb_matrix, calculate_connectivity_matrix
+from features import calculate_coulomb_matrix, calculate_connectivity_matrix, calculate_cep_matrix
 
 MAX_MOL_SIZE = 29
 
@@ -31,9 +31,10 @@ class MoleculeRaster(object):
 
         distance_matrix = molecule['distance_matrix']
         coulomb_matrix = calculate_coulomb_matrix(molecule['rdkit'], distance_matrix)
-        adjacency_matrix = calculate_connectivity_matrix(molecule['rdkit'])
+        connectivity_matrix = calculate_connectivity_matrix(molecule['rdkit'])
+        cep_matrix = calculate_cep_matrix(molecule['rdkit'])
 
-        raster = np.stack([distance_matrix, coulomb_matrix, adjacency_matrix])
+        raster = np.stack([distance_matrix, coulomb_matrix, connectivity_matrix, cep_matrix])
         if self.transform is not None:
             raster = self.transform(raster)
 
@@ -42,7 +43,7 @@ class MoleculeRaster(object):
 
 def create_molecule_rasters(molecule_map, generate_raster):
     molecule_rasters = dict()
-    for name in tqdm_notebook(molecule_map.keys()):
+    for name in tqdm(molecule_map.keys()):
         if name != 'scalar_descriptor_keys':
             molecule_rasters[name] = generate_raster(name)
     return molecule_rasters
@@ -51,7 +52,7 @@ def create_molecule_rasters(molecule_map, generate_raster):
 def create_target_coupling_rasters(data, molecule_map):
     coupling_targets = dict()
     molecule_groups = data.groupby('molecule_name')
-    for name, atom_pairs in tqdm_notebook(molecule_groups):
+    for name, atom_pairs in tqdm(molecule_groups):
         num_atoms = molecule_map[name]['rdkit'].GetNumAtoms()
         coupling_constants = np.zeros((num_atoms, num_atoms))
 
@@ -209,7 +210,6 @@ def val_epoch(model, dataloader, criterion, device):
 def run(root_dir, coupling, molecule_map):
     data = pd.read_csv(os.path.join(root_dir, f'train/data_{coupling}.csv'))
     data = data[['id', 'molecule_name', 'atom_index_0', 'atom_index_1', 'scalar_coupling_constant']]
-    num_molecules = len(molecule_map)
 
     mol_mat = MoleculeRaster(molecule_map)
     molecule_rasters = create_molecule_rasters(molecule_map, mol_mat)
