@@ -9,10 +9,9 @@ Description:
 using the final node representations by using DistMult (a bilinear scoring function).
 - If training on all of the data at once, it would make sense to have separate DistMult matrices for each coupling type.
 """
-import os
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, APPNP
 
 
 # TODO: update this so that it works with batches of graphs
@@ -34,7 +33,7 @@ class NodePairScorer(nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.linmap_input = nn.Linear(input_dim, hidden_dim)
+        self.map_input = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU())
         self.distmult = nn.Parameter(torch.rand(1, hidden_dim))
         self.graph_convs = None  # this attribute should be extended with the appropriate list of graph convolutions
 
@@ -80,7 +79,7 @@ class NodePairScorer(nn.Module):
         if self.graph_convs is None:
             raise ValueError("Subclass of NodePairScorer must define a 'graph_convs'"
                              " attribute as a ModuleList of graph convolutions")
-        x = self.linmap_input(x)
+        x = self.map_input(x)
         for gcn in self.graph_convs:
             x = gcn(x, edge_index)
         scores = self.score_node_pairs(x[node_i], x[node_j])
@@ -91,6 +90,14 @@ class GCNConvNodePairScorer(NodePairScorer):
     def __init__(self, input_dim, hidden_dim, num_layers=1):
         super().__init__(input_dim, hidden_dim)
         self.graph_convs = nn.ModuleList([GCNConv(hidden_dim, hidden_dim) for _ in range(num_layers)])
+
+
+class APPNPNodePairScorer(NodePairScorer):
+    def __init__(self, input_dim, hidden_dim, k=10, alpha=0.1, num_layers=1):
+        super().__init__(input_dim, hidden_dim)
+        self.k = k
+        self.alpha = alpha
+        self.graph_convs = nn.ModuleList([APPNP(k, alpha) for _ in range(num_layers)])
 
 
 if __name__ == '__main__':
