@@ -6,6 +6,7 @@ import re
 import time
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
 from dtsckit.utils import write_pickle
@@ -27,15 +28,18 @@ def get_faulty_pairs(df):
 
 def get_feature_columns(coupling_type):
     if coupling_type == '1JHC' or coupling_type == '1JHN':
-        return Prepare1JH_.feature_cols()
+        feature_cols =  Prepare1JH_.feature_cols()
     elif coupling_type == '2JHH':
-        return Prepare2JHH.feature_cols()
+        feature_cols =  Prepare2JHH.feature_cols()
     elif coupling_type == '2JHC' or coupling_type == '2JHN':
-        return Prepare2JH_.feature_cols()
+        feature_cols =  Prepare2JH_.feature_cols()
     elif coupling_type == '3JHH':
-        return Prepare3JHH.feature_cols()
+        feature_cols =  Prepare3JHH.feature_cols()
     elif coupling_type == '3JHC' or coupling_type == '3JHN':
-        return Prepare3JH_.feature_cols()
+        feature_cols =  Prepare3JH_.feature_cols()
+    else:
+        raise ValueError(f'Unexpected coupling: {coupling_type}')
+    return feature_cols
 
 
 if __name__ == '__main__':
@@ -43,7 +47,7 @@ if __name__ == '__main__':
     TRAIN_DIR = os.path.join(ROOT_DIR, 'train')
     TEST_DIR = os.path.join(ROOT_DIR, 'test')
 
-    submission_filepath = os.path.join(ROOT_DIR, 'submission.csv')
+    submission_filepath = os.path.join(ROOT_DIR, 'submissions/pairwise_submission.csv')
     submission_df = pd.read_csv(submission_filepath)
     submission_df['scalar_coupling_constant'] = 0
     submission_df.index = submission_df['id'].values
@@ -68,20 +72,11 @@ if __name__ == '__main__':
         x_train = train_df[feature_columns].values
         y_train = train_df['scalar_coupling_constant'].values
         ######################################## Hyperparameter tuning #################################################
-        # params = [{'min_samples_leaf': [10, 20, 50],
-        #            'max_depth': [3, 5, 8, None],
-        #            'max_features': ['sqrt', 0.5]}]
-        #
-        # clf = GridSearchCV(RandomForestRegressor(300), params, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
-        # clf.fit(x_train, y_train)
-        #
-        # score = np.log(-1 * clf.best_score_)
-        # scores[coupling_type] = score
-        # print(f'Log MAE Score: {score}')
-        # print(f'Best parameters: {clf.best_params_}')
+        # TODO: add this back at the end (temporarily removed)
         ######################################## Train on all the data #################################################
-        # model = clf.best_estimator_
-        model = RandomForestRegressor(n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10)
+        model = RandomForestRegressor(
+            n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
+        )
         model.fit(x_train, y_train)
         models[coupling_type] = model
 

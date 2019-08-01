@@ -148,7 +148,8 @@ def calculate_dihedral_angles(df, molecule_map, start_col, x_col, y_col, end_col
 #                  Define the objects to extract the appropriate features from each coupling type
 ########################################################################################################################
 
-
+# TODO: add number of bonds per atom along the path
+# TODO: add the bond angle of every three pairs of atoms along the path (for 2J and 3J couplings)
 class FeatureEngineer(object):
     """A base class for the feature engineering objects across coupling types
 
