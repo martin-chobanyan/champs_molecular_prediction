@@ -11,7 +11,19 @@ using the final node representations by using DistMult (a bilinear scoring funct
 """
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GCNConv, APPNP
+from torch_geometric.nn import MessagePassing, GCNConv, APPNP
+
+
+class GCNSequential(nn.Sequential):
+    """A subclass of Sequential that extends the functionality for pytorch geometric layers"""
+    def forward(self, *inputs):
+        for module in self._modules.values():
+            if isinstance(module, MessagePassing):
+                x = module(*inputs)
+            else:
+                x = module(inputs[0])
+            inputs = (x, *inputs[1:])
+        return inputs[0]
 
 
 # TODO: update this so that it works with batches of graphs
@@ -35,7 +47,7 @@ class NodePairScorer(nn.Module):
         self.hidden_dim = hidden_dim
         self.map_input = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU())
         self.distmult = nn.Parameter(torch.rand(1, hidden_dim))
-        self.graph_convs = None  # this attribute should be extended with the appropriate list of graph convolutions
+        self.gcn = None  # this attribute should be extended with the appropriate graph convolutions
 
     def score_node_pairs(self, x_i, x_j):
         """Calculate the score between pairs of nodes
@@ -76,12 +88,8 @@ class NodePairScorer(nn.Module):
         torch.Tensor
             A tensor of shape [num_pairs] containing the scores of each node pair.
         """
-        if self.graph_convs is None:
-            raise ValueError("Subclass of NodePairScorer must define a 'graph_convs'"
-                             " attribute as a ModuleList of graph convolutions")
         x = self.map_input(x)
-        for gcn in self.graph_convs:
-            x = gcn(x, edge_index)
+        x = self.gcn(x, edge_index)
         scores = self.score_node_pairs(x[node_i], x[node_j])
         return scores
 
@@ -89,15 +97,20 @@ class NodePairScorer(nn.Module):
 class GCNConvNodePairScorer(NodePairScorer):
     def __init__(self, input_dim, hidden_dim, num_layers=1):
         super().__init__(input_dim, hidden_dim)
-        self.graph_convs = nn.ModuleList([GCNConv(hidden_dim, hidden_dim) for _ in range(num_layers)])
+        gcn_layers = []
+        for _ in range(num_layers - 1):
+            gcn_layers.append(GCNConv(hidden_dim, hidden_dim))
+            gcn_layers.append(nn.ReLU())
+        gcn_layers.append(GCNConv(hidden_dim, hidden_dim))
+        self.gcn = GCNSequential(*gcn_layers)
 
 
 class APPNPNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, k=10, alpha=0.1, num_layers=1):
+    def __init__(self, input_dim, hidden_dim, k=10, alpha=0.1):
         super().__init__(input_dim, hidden_dim)
         self.k = k
         self.alpha = alpha
-        self.graph_convs = nn.ModuleList([APPNP(k, alpha) for _ in range(num_layers)])
+        self.gcn = APPNP(K=k, alpha=alpha)
 
 
 if __name__ == '__main__':
