@@ -10,15 +10,22 @@ using the final node representations by using DistMult (a bilinear scoring funct
 - If training on all of the data at once, it would make sense to have separate DistMult matrices for each coupling type.
 """
 import os
+import time
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from dtsckit.utils import read_pickle
+from sklearn.preprocessing import StandardScaler
+from dtsckit.model import AverageKeeper
+from dtsckit.utils import read_pickle, write_pickle
 
 import torch
 import torch.nn as nn
+from torch.optim import Adam
 from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv
+from torch_geometric.data import Data, DataLoader
 
-from features import ElementalFeatures, BaseAtomicFeatures
+from features import ElementalFeatures, BaseAtomicFeatures, AtomCenteredSymmetryFeatures
+from pairwise_predictions import process_filename
 
 
 ########################################################################################################################
@@ -29,14 +36,14 @@ from features import ElementalFeatures, BaseAtomicFeatures
 class MoleculeGraph(object):
     def __init__(self,
                  molecule_map,
+                 base_atomic_features=None,
                  acsf=None,
                  soap=None,
                  lmbtr=None,
-                 elemental_features=False,
-                 base_atomic_features=True):
+                 elemental_features=False):
         self.molecule_map = molecule_map
         self.element_features = ElementalFeatures() if elemental_features else None
-        self.atomic_features = BaseAtomicFeatures(molecule_map) if base_atomic_features else None
+        self.atomic_features = base_atomic_features
         self.acsf = acsf
         self.soap = soap
         self.lmbtr = lmbtr
@@ -71,6 +78,26 @@ def create_molecule_graphs(molecule_map, generate_mol_graph):
         if name != 'scalar_descriptor_keys':
             molecule_graphs[name] = generate_mol_graph(name)
     return molecule_graphs
+
+
+class MoleculeData(object):
+    def __init__(self, mol_graph, df):
+        self.mol_graph = mol_graph
+        self.df = df
+
+    def __call__(self, name):
+        x, edge_index = self.mol_graph[name]
+        num_atoms = torch.LongTensor([x.shape[0]])
+
+        molecule_rows = self.df.loc[self.df['molecule_name'] == name]
+        atom_pairs = torch.LongTensor(molecule_rows[['atom_index_0', 'atom_index_1']].values)
+        couplings = torch.FloatTensor(molecule_rows['scalar_coupling_constant'].values)
+        num_couplings = torch.LongTensor([len(couplings)])
+
+        data = Data(x=x, edge_index=edge_index,
+                    atom_pairs=atom_pairs, couplings=couplings,
+                    num_atoms=num_atoms, num_couplings=num_couplings)
+        return data
 
 
 ########################################################################################################################
@@ -215,8 +242,176 @@ def update_batch_atom_pairs(batch):
     batch['atom_pairs'] = atom_pairs
 
 
+def train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device):
+    model.train()
+    avg_keeper = AverageKeeper()
+    for batch in dataloader:
+        update_batch_atom_pairs(batch)
+        node_features = batch.x.to(device)
+        edge_index = batch.edge_index.to(device)
+        atom_pairs = batch.atom_pairs.to(device)
+        couplings = batch.couplings.to(device)
+
+        optimizer.zero_grad()
+        pred = model(node_features, edge_index, atom_pairs[:, 0], atom_pairs[:, 1])
+        loss = criterion(pred, couplings)
+        loss.backward()
+        optimizer.step()
+        avg_keeper.add(loss)
+
+    avg_loss = avg_keeper.calculate()
+    return avg_loss
+
+
+def validate_molecule_gcn_epoch(model, dataloader, criterion, device):
+    model.eval()
+    avg_keeper = AverageKeeper()
+    with torch.no_grad():
+        for batch in dataloader:
+            update_batch_atom_pairs(batch)
+            node_features = batch.x.to(device)
+            edge_index = batch.edge_index.to(device)
+            atom_pairs = batch.atom_pairs.to(device)
+            couplings = batch.couplings.to(device)
+
+            pred = model(node_features, edge_index, atom_pairs[:, 0], atom_pairs[:, 1])
+            loss = criterion(pred, couplings)
+            avg_keeper.add(loss)
+
+    avg_loss = avg_keeper.calculate()
+    return avg_loss
+
+
 if __name__ == '__main__':
-    coupling_type = '1JHN'
-    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules'
-    data = pd.read_csv(os.path.join(ROOT_DIR, f'train/data_{coupling_type}.csv'))
+    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
+    TRAIN_DIR = os.path.join(ROOT_DIR, 'train')
+    TEST_DIR = os.path.join(ROOT_DIR, 'test')
+    MAX_MOL_SIZE = 29
     molecule_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
+    num_molecules = len(molecule_map)
+
+    submission_filepath = os.path.join(ROOT_DIR, 'submissions/gat_submission.csv')
+    submission_df = pd.read_csv(os.path.join(ROOT_DIR, 'submissions/submission.csv'))
+    submission_df['scalar_coupling_constant'] = 0
+    submission_df.index = submission_df['id'].values
+
+    ###################################### Define the local molecular descriptors ######################################
+    r_c = 0.0
+    for name in molecule_map:
+        if 'scalar' not in name:
+            distances = molecule_map[name]['distance_matrix']
+            r_c = max(r_c, distances.max())
+
+    # Configure the "Atom-centered symmetry functions"
+
+    # G2 - eta/Rs couples:
+    g2_params = []
+    for eta in [0.01, 0.1, 0.5, 1]:
+        for rs in [2, 6]:
+            g2_params.append((eta, rs))
+
+    # G4 - eta/ksi/lambda triplets:
+    g4_params = []
+    for eta in [0.01, 0.1, 0.5, 1]:
+        for zeta in [4]:
+            for lambda_exp in [-1, 1]:
+                g4_params.append((eta, zeta, lambda_exp))
+
+    base_features = BaseAtomicFeatures(molecule_map)
+    acsf = AtomCenteredSymmetryFeatures(molecule_map, r_c, g2_params=g2_params, g4_params=g4_params)
+    mol_graph = MoleculeGraph(molecule_map, base_features, acsf)
+
+    print('Creating the molecule features:')
+    mol_graphs = create_molecule_graphs(molecule_map, mol_graph)
+
+    num_features = mol_graphs['dsgdb9nsd_000011'][0].shape[1]
+    print(f'number of features: {num_features}')
+    ####################################################################################################################
+
+    models = dict()
+    scores = dict()
+    feature_importances = dict()
+    total_time = 0
+    for filename in os.listdir(TRAIN_DIR):
+        ######################################## Load the training data ################################################
+        start_time = time.time()
+        coupling_type, num_hops, h2h = process_filename(filename)
+        print(f'\nTraining model for {coupling_type}')
+        train_df = pd.read_csv(os.path.join(TRAIN_DIR, filename))
+        train_df = train_df[['id', 'molecule_name', 'atom_index_0', 'atom_index_1', 'scalar_coupling_constant']]
+
+        standardize = StandardScaler()
+        train_df['scalar_coupling_constant'] = standardize.fit_transform(
+            train_df['scalar_coupling_constant'].values.reshape(-1, 1)
+        ).squeeze()
+
+        print(f'Coupling average:\t{standardize.mean_[0]}')
+        print(f'Coupling stdev:\t\t{np.sqrt(standardize.var_[0])}')
+
+        ######################################## Create the dataloader #################################################
+        graphs = MoleculeData(mol_graphs, train_df)
+        molecule_names = train_df['molecule_name'].unique()
+
+        data_list = []
+        for name in tqdm(molecule_names):
+            data_list.append(graphs(name))
+
+        dataloader = DataLoader(data_list, batch_size=128, shuffle=True)
+
+        ##################################### Define and train the model ###############################################
+        num_layers = 3
+        hidden_dim = 300
+        device = torch.device('cuda')
+        model = GATNodePairScorer(num_features, hidden_dim, num_layers, heads=8, concat_heads=False)
+        model = model.to(device)
+        criterion = nn.MSELoss()
+        optimizer = Adam(model.parameters(), lr=0.0005)
+
+        num_epochs = 80
+        train_losses = []
+        val_losses = []
+        for epoch in range(num_epochs):
+            print(f'Epoch: {epoch}')
+            train_loss = train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device)
+            print(f'Training loss:\t\t{train_loss}')
+            train_losses.append(train_loss)
+
+        models[coupling_type] = model
+        ######################################## Make the predictions ##################################################
+        test_df = pd.read_csv(os.path.join(TEST_DIR, filename))
+
+        row_ids = []
+        preds = []
+        model.eval()
+        molecule_groups = test_df.groupby('molecule_name')
+        for name, molecule_rows in tqdm(molecule_groups):
+            num_atoms = molecule_map[name]['rdkit'].GetNumAtoms()
+
+            x, edge_index = mol_graph(name)
+            idx, i, j = molecule_rows[['id', 'atom_index_0', 'atom_index_1']].values.T
+
+            x = x.to(device)
+            edge_index = edge_index.to(device)
+            i = torch.LongTensor(i).to(device)
+            j = torch.LongTensor(j).to(device)
+
+            with torch.no_grad():
+                pred = model(x, edge_index, i, j)
+
+            row_ids.append(idx)
+            preds.append(pred.cpu().numpy())
+
+        row_ids = np.concatenate(row_ids, 0)
+        preds = standardize.inverse_transform(np.concatenate(preds, 0).reshape(-1, 1)).squeeze()
+        submission_df.loc[row_ids, 'scalar_coupling_constant'] = preds
+
+        elapsed_time = (time.time() - start_time) / 3600
+        print(f'Time elapsed: {elapsed_time} hours')
+        total_time += elapsed_time
+        ################################################################################################################
+
+    print(f'\nTotal time elapsed: {total_time} hours')
+    print('\nSaving the submissions...')
+    write_pickle(models, os.path.join(ROOT_DIR, 'models/pairwise/gat_models.pkl'))
+    submission_df.to_csv(submission_filepath, index=False)
+    print('Done!')
