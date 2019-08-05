@@ -4,6 +4,11 @@
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 import torch
+
+# import the chemistry packages
+from ase.atoms import Atoms as ase_atoms
+from dscribe.descriptors import ACSF, LMBTR
+from mendeleev import element
 from rdkit.Chem import Mol
 import rdkit.Chem.rdMolDescriptors as rdMD
 
@@ -104,19 +109,103 @@ def calculate_coulomb_matrix(molecule, distance_matrix):
     for i in range(num_atoms):
         for j in range(num_atoms):
             if i == j:
-                coulomb[i, i] = 0.5 * (charges[i] ** 2.4)
+                pass
+                # coulomb[i, i] = 0.5 * (charges[i] ** 2.4)
             else:
                 coulomb[i, j] = (charges[i] * charges[j]) / distance_matrix[i, j]
     return coulomb
 
 
 ########################################################################################################################
-#                                       Define molecular feature vectors
+#                                           Define elemental features
+########################################################################################################################
+
+
+class ElementalFeatures(object):
+    def __init__(self):
+        self.elements = {'H': element('H'), 'C': element('C'), 'N': element('N'), 'O': element('O'), 'F': element('F')}
+
+    def __call__(self, symbol):
+        e = self.elements[symbol]
+        features = [e.atomic_number, e.atomic_radius_rahm, e.atomic_volume, e.c6_gb, e.covalent_radius_pyykko,
+                    e.density, e.dipole_polarizability, e.electron_affinity, e.en_pauling, e.heat_of_formation,
+                    int(e.is_monoisotopic is not None), e.thermal_conductivity, e.vdw_radius]
+        return features
+
+
+########################################################################################################################
+#                                            Define local molecule descriptors
+########################################################################################################################
+
+
+class BaseAtomicFeatures(object):
+    def __init__(self, molecule_map):
+        self.molecule_map = molecule_map
+
+    def __call__(self, molecule_name):
+        atomic_features = []
+        molecule = self.molecule_map[molecule_name]
+        gasteiger_charges = molecule['g_charges']
+        eem_charges = molecule['eem_charges']
+        for i, atom in enumerate(molecule['rdkit'].GetAtoms()):
+            features = [gasteiger_charges[i], eem_charges[i]]
+            features += encode_hybridization(str(atom.GetHybridization()))
+            features += [atom.IsInRing()]
+            atomic_features.append(features)
+        return np.array(atomic_features)
+
+
+class DscribeAtomicFeatures(object):
+    """Base class for all 'dscribe' based local/global molecule descriptors"""
+
+    def __init__(self, molecule_map, n_jobs):
+        self.molecule_map = molecule_map
+        self.species = ['H', 'C', 'N', 'O', 'F']
+        self.dscribe_func = None
+        self.n_jobs = n_jobs
+
+    def __call__(self, molecule_name):
+        molecule_dict = self.molecule_map[molecule_name]
+        molecule = ase_atoms(symbols=molecule_dict['symbols'], positions=molecule_dict['coords'])
+        features = self.dscribe_func.create(molecule, n_jobs=self.n_jobs)
+        return features
+
+
+class AtomCenteredSymmetryFeatures(DscribeAtomicFeatures):
+    def __init__(self, molecule_map, r_cut, g2_params=None, g3_params=None, g4_params=None, g5_params=None, n_jobs=1):
+        super().__init__(molecule_map, n_jobs)
+        self.r_cut = r_cut
+        self.g2_params = g2_params
+        self.g3_params = g3_params
+        self.g4_params = g4_params
+        self.g5_params = g5_params
+        self.dscribe_func = ACSF(species=self.species,
+                                 rcut=r_cut,
+                                 g2_params=g2_params,
+                                 g3_params=g3_params,
+                                 g4_params=g4_params,
+                                 g5_params=g5_params)
+
+
+class LocalManyBodyTensorFeatures(DscribeAtomicFeatures):
+    def __init__(self, molecule_map, k2_params=None, k3_params=None, n_jobs=1):
+        super().__init__(molecule_map, n_jobs)
+        self.k2_params = k2_params
+        self.k3_params = k3_params
+        self.dscribe_func = LMBTR(species=self.species,
+                                  k2=k2_params,
+                                  k3=k3_params,
+                                  periodic=False,
+                                  normalization='l2_each')
+
+
+########################################################################################################################
+#                                          Define global molecule descriptors
 ########################################################################################################################
 
 
 def calculate_scalar_descriptors(molecule, symbols):
-    features = []
+    features = list()
     features.append(rdMD.CalcAsphericity(molecule))
     features += list(rdMD.CalcCrippenDescriptors(molecule))
     features.append(rdMD.CalcExactMolWt(molecule))
@@ -214,3 +303,16 @@ def get_unique_hybridizations(molec_struct_map):
         h = [str(atom.GetHybridization()) for atom in molecule.GetAtoms()]
         hybridization_set.update(h)
     return hybridization_set
+
+
+def encode_hybridization(hybridization):
+    if hybridization == 'S':
+        return [0, 0, 0]
+    elif hybridization == 'SP':
+        return [1, 0, 0]
+    elif hybridization == 'SP2':
+        return [0, 1, 0]
+    elif hybridization == 'SP3':
+        return [0, 0, 1]
+    else:
+        raise ValueError(f'Encountered a new hybridization: {hybridization}')

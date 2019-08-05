@@ -9,13 +9,77 @@ Description:
 using the final node representations by using DistMult (a bilinear scoring function).
 - If training on all of the data at once, it would make sense to have separate DistMult matrices for each coupling type.
 """
+import os
+import pandas as pd
+from tqdm import tqdm
+from dtsckit.utils import read_pickle
+
 import torch
 import torch.nn as nn
-from torch_geometric.nn import MessagePassing, GCNConv, APPNP
+from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv
 
+from features import ElementalFeatures, BaseAtomicFeatures
+
+
+########################################################################################################################
+#                                               Feature generation
+########################################################################################################################
+
+
+class MoleculeGraph(object):
+    def __init__(self,
+                 molecule_map,
+                 acsf=None,
+                 soap=None,
+                 lmbtr=None,
+                 elemental_features=False,
+                 base_atomic_features=True):
+        self.molecule_map = molecule_map
+        self.element_features = ElementalFeatures() if elemental_features else None
+        self.atomic_features = BaseAtomicFeatures(molecule_map) if base_atomic_features else None
+        self.acsf = acsf
+        self.soap = soap
+        self.lmbtr = lmbtr
+
+    def __call__(self, name):
+        features = []
+        if self.element_features is not None:
+            symbols = self.molecule_map[name]['symbols']
+            elemental_features = [self.element_features(s) for s in symbols]
+            features.append(torch.Tensor(elemental_features))
+
+        if self.atomic_features is not None:
+            features.append(torch.Tensor(self.atomic_features(name)))
+
+        if self.acsf is not None:
+            features.append(torch.Tensor(self.acsf(name)))
+
+        if self.soap is not None:
+            features.append(torch.Tensor(self.soap(name)))
+
+        if self.lmbtr is not None:
+            features.append(torch.Tensor(self.lmbtr(name)))
+
+        node_features = torch.cat(features, dim=1)
+        edge_index = self.molecule_map[name]['bonds']
+        return node_features, edge_index
+
+
+def create_molecule_graphs(molecule_map, generate_mol_graph):
+    molecule_graphs = dict()
+    for name in tqdm(molecule_map.keys()):
+        if name != 'scalar_descriptor_keys':
+            molecule_graphs[name] = generate_mol_graph(name)
+    return molecule_graphs
+
+
+########################################################################################################################
+#                                                  Define the models
+########################################################################################################################
 
 class GCNSequential(nn.Sequential):
     """A subclass of Sequential that extends the functionality for pytorch geometric layers"""
+
     def forward(self, *inputs):
         for module in self._modules.values():
             if isinstance(module, MessagePassing):
@@ -26,7 +90,6 @@ class GCNSequential(nn.Sequential):
         return inputs[0]
 
 
-# TODO: update this so that it works with batches of graphs
 class NodePairScorer(nn.Module):
     """An abstract class defining the infrastructure for the GCN models to predict node pair scores
 
@@ -113,9 +176,47 @@ class APPNPNodePairScorer(NodePairScorer):
         self.gcn = APPNP(K=k, alpha=alpha)
 
 
+class GATNodePairScorer(NodePairScorer):
+    def __init__(self, input_dim, hidden_dim, num_layers=1, heads=1, concat_heads=True, leaky_slope=0.2, dropout=0,
+                 update_activation=True):
+        super().__init__(input_dim, hidden_dim)
+        gcn_layers = []
+        for _ in range(num_layers - 1):
+            gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, dropout))
+            if update_activation:
+                gcn_layers.append(nn.ReLU())
+        gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, dropout))
+        self.gcn = GCNSequential(*gcn_layers)
+
+
+########################################################################################################################
+#                                              Define the training pipeline
+########################################################################################################################
+
+
+def update_batch_atom_pairs(batch):
+    """Update atom pairs index in the Data batch
+
+    Parameters
+    ----------
+    batch: Data
+        A pytorch geometric Data instance containing a batch of graphs stacked as a large, unconnected graph.
+    """
+    atom_pairs = batch['atom_pairs']
+    num_couplings = batch['num_couplings']
+    num_atoms = batch['num_atoms']
+
+    coupling_lens = [0] + torch.cumsum(num_couplings, 0).tolist()
+    offsets = [0] + torch.cumsum(num_atoms, 0)[:-1].tolist()
+
+    for offset, (i, j) in zip(offsets, zip(coupling_lens[:-1], coupling_lens[1:])):
+        atom_pairs[i:j] += offset
+
+    batch['atom_pairs'] = atom_pairs
+
+
 if __name__ == '__main__':
-    X = torch.rand(4, 5)
-    e = [[0, 0, 0, 1, 1, 2, 2, 3], [1, 2, 3, 0, 2, 1, 3, 2]]
-    a = torch.LongTensor(e)
-    model = GCNConvNodePairScorer(5, 3, 2)
-    print(model(X, a, torch.LongTensor([0, 0, 2]), torch.LongTensor([1, 2, 3])))
+    coupling_type = '1JHN'
+    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules'
+    data = pd.read_csv(os.path.join(ROOT_DIR, f'train/data_{coupling_type}.csv'))
+    molecule_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
