@@ -30,6 +30,9 @@ class MoleculeRaster(object):
         molecule = self.molecule_map[molecule_name]
 
         distance_matrix = molecule['distance_matrix']
+        # nonzero_idx = np.nonzero(distance_matrix)
+        # distance_matrix[nonzero_idx] = distance_matrix[nonzero_idx] ** -3
+
         coulomb_matrix = calculate_coulomb_matrix(molecule['rdkit'], distance_matrix)
         connectivity_matrix = calculate_connectivity_matrix(molecule['rdkit'])
         cep_matrix = calculate_cep_matrix(molecule['rdkit'])
@@ -126,7 +129,7 @@ class MoleculeRasterDataset(Dataset):
 class MoleculeCNN(nn.Module):
     def __init__(self, raster_dim=MAX_MOL_SIZE):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.conv1 = nn.Conv2d(4, 16, 3, padding=1)
         self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
         self.conv3 = nn.Conv2d(32, 1, 3, padding=1)
         self.relu = nn.LeakyReLU()
