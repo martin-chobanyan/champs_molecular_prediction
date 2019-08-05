@@ -10,15 +10,13 @@ using the final node representations by using DistMult (a bilinear scoring funct
 - If training on all of the data at once, it would make sense to have separate DistMult matrices for each coupling type.
 """
 import os
+import numpy as np
 import pandas as pd
-from tqdm import tqdm
 from dtsckit.utils import read_pickle
 
 import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv
-
-from features import ElementalFeatures, BaseAtomicFeatures
 
 
 ########################################################################################################################
@@ -26,51 +24,42 @@ from features import ElementalFeatures, BaseAtomicFeatures
 ########################################################################################################################
 
 
-class MoleculeGraph(object):
-    def __init__(self,
-                 molecule_map,
-                 acsf=None,
-                 soap=None,
-                 lmbtr=None,
-                 elemental_features=False,
-                 base_atomic_features=True):
-        self.molecule_map = molecule_map
-        self.element_features = ElementalFeatures() if elemental_features else None
-        self.atomic_features = BaseAtomicFeatures(molecule_map) if base_atomic_features else None
-        self.acsf = acsf
-        self.soap = soap
-        self.lmbtr = lmbtr
+def create_local_molecule_descriptors(molecule_map,
+                                      base_atomic_features=None,
+                                      acsf=None,
+                                      soap=None,
+                                      lmbtr=None):
+    molecule_names = []
+    molecule_sizes = []
+    for name, molecule in molecule_map.items():
+        if 'scalar' not in name:
+            molecule_names.append(name)
+            molecule_sizes.append(len(molecule['symbols']))
 
-    def __call__(self, name):
-        features = []
-        if self.element_features is not None:
-            symbols = self.molecule_map[name]['symbols']
-            elemental_features = [self.element_features(s) for s in symbols]
-            features.append(torch.Tensor(elemental_features))
+    local_descriptors = []
+    if base_atomic_features is not None:
+        print('Calculating the base atomic features...')
+        local_descriptors.append(base_atomic_features(molecule_names))
+    if acsf is not None:
+        print('Calculating the ACSF features...')
+        local_descriptors.append(acsf(molecule_names))
+    if soap is not None:
+        print('Calculating the SOAP features...')
+        local_descriptors.append(soap(molecule_names))
+    if lmbtr is not None:
+        print('Calculating the LMBTR features...')
+        local_descriptors.append(lmbtr(molecule_names))
 
-        if self.atomic_features is not None:
-            features.append(torch.Tensor(self.atomic_features(name)))
+    local_descriptors = np.concatenate(local_descriptors, axis=1)
+    local_descriptors = torch.Tensor(local_descriptors)
 
-        if self.acsf is not None:
-            features.append(torch.Tensor(self.acsf(name)))
+    i = 0
+    local_descriptor_map = dict()
+    for name, size in zip(molecule_names, molecule_sizes):
+        local_descriptor_map[name] = local_descriptors[i:i+size]
+        i += size
 
-        if self.soap is not None:
-            features.append(torch.Tensor(self.soap(name)))
-
-        if self.lmbtr is not None:
-            features.append(torch.Tensor(self.lmbtr(name)))
-
-        node_features = torch.cat(features, dim=1)
-        edge_index = self.molecule_map[name]['bonds']
-        return node_features, edge_index
-
-
-def create_molecule_graphs(molecule_map, generate_mol_graph):
-    molecule_graphs = dict()
-    for name in tqdm(molecule_map.keys()):
-        if name != 'scalar_descriptor_keys':
-            molecule_graphs[name] = generate_mol_graph(name)
-    return molecule_graphs
+    return local_descriptor_map
 
 
 ########################################################################################################################

@@ -121,16 +121,16 @@ def calculate_coulomb_matrix(molecule, distance_matrix):
 ########################################################################################################################
 
 
-class ElementalFeatures(object):
-    def __init__(self):
-        self.elements = {'H': element('H'), 'C': element('C'), 'N': element('N'), 'O': element('O'), 'F': element('F')}
-
-    def __call__(self, symbol):
-        e = self.elements[symbol]
-        features = [e.atomic_number, e.atomic_radius_rahm, e.atomic_volume, e.c6_gb, e.covalent_radius_pyykko,
-                    e.density, e.dipole_polarizability, e.electron_affinity, e.en_pauling, e.heat_of_formation,
-                    int(e.is_monoisotopic is not None), e.thermal_conductivity, e.vdw_radius]
-        return features
+# class ElementalFeatures(object):
+#     def __init__(self):
+#         self.elements = {'H': element('H'), 'C': element('C'), 'N': element('N'), 'O': element('O'), 'F': element('F')}
+#
+#     def __call__(self, symbol):
+#         e = self.elements[symbol]
+#         features = [e.atomic_number, e.atomic_radius_rahm, e.atomic_volume, e.c6_gb, e.covalent_radius_pyykko,
+#                     e.density, e.dipole_polarizability, e.electron_affinity, e.en_pauling, e.heat_of_formation,
+#                     int(e.is_monoisotopic is not None), e.thermal_conductivity, e.vdw_radius]
+#         return features
 
 
 ########################################################################################################################
@@ -142,16 +142,17 @@ class BaseAtomicFeatures(object):
     def __init__(self, molecule_map):
         self.molecule_map = molecule_map
 
-    def __call__(self, molecule_name):
+    def __call__(self, molecule_names):
         atomic_features = []
-        molecule = self.molecule_map[molecule_name]
-        gasteiger_charges = molecule['g_charges']
-        eem_charges = molecule['eem_charges']
-        for i, atom in enumerate(molecule['rdkit'].GetAtoms()):
-            features = [gasteiger_charges[i], eem_charges[i]]
-            features += encode_hybridization(str(atom.GetHybridization()))
-            features += [atom.IsInRing()]
-            atomic_features.append(features)
+        for name in molecule_names:
+            molecule = self.molecule_map[name]
+            gasteiger_charges = molecule['g_charges']
+            eem_charges = molecule['eem_charges']
+            for i, atom in enumerate(molecule['rdkit'].GetAtoms()):
+                features = [gasteiger_charges[i], eem_charges[i]]
+                features += encode_hybridization(str(atom.GetHybridization()))
+                features += [atom.IsInRing()]
+                atomic_features.append(features)
         return np.array(atomic_features)
 
 
@@ -164,10 +165,14 @@ class DscribeAtomicFeatures(object):
         self.dscribe_func = None
         self.n_jobs = n_jobs
 
-    def __call__(self, molecule_name):
-        molecule_dict = self.molecule_map[molecule_name]
-        molecule = ase_atoms(symbols=molecule_dict['symbols'], positions=molecule_dict['coords'])
-        features = self.dscribe_func.create(molecule, n_jobs=self.n_jobs)
+    def __call__(self, molecule_names):
+        molecules = []
+        for name in molecule_names:
+            molecule_dict = self.molecule_map[name]
+            molecule = ase_atoms(symbols=molecule_dict['symbols'], positions=molecule_dict['coords'])
+            molecules.append(molecule)
+
+        features = self.dscribe_func.create(molecules, n_jobs=self.n_jobs)
         return features
 
 
