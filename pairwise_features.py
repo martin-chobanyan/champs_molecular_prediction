@@ -6,9 +6,10 @@ import re
 from argparse import ArgumentParser
 import numpy as np
 import pandas as pd
-
 from dtsckit.utils import read_pickle
+
 from chem_math import find_atomic_path, vectorized_dihedral_angle
+from features import encode_hybridization
 
 
 ########################################################################################################################
@@ -64,20 +65,9 @@ def calculate_neighborhood(molecule_map, molecule_name, atom_idx):
 def find_hybridization(molecule_map, molec_name, atom_idx):
     if atom_idx == -1:
         return [-1, -1, -1]
-
     molecule = molecule_map[molec_name]['rdkit']
     atom = molecule.GetAtomWithIdx(atom_idx)
-    hybridization = str(atom.GetHybridization())
-    if hybridization == 'S':
-        return [0, 0, 0]
-    elif hybridization == 'SP':
-        return [1, 0, 0]
-    elif hybridization == 'SP2':
-        return [0, 1, 0]
-    elif hybridization == 'SP3':
-        return [0, 0, 1]
-    else:
-        raise ValueError(f'Encountered a new hybridization: {hybridization}')
+    return encode_hybridization(str(atom.GetHybridization()))
 
 
 def encode_inner_element(molecule_map, molec_name, atom_idx):
