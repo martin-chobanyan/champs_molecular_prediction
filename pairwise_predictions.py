@@ -28,15 +28,15 @@ def get_faulty_pairs(df):
 
 def get_feature_columns(coupling_type):
     if coupling_type == '1JHC' or coupling_type == '1JHN':
-        feature_cols =  Prepare1JH_.feature_cols()
+        feature_cols = Prepare1JH_.feature_cols()
     elif coupling_type == '2JHH':
-        feature_cols =  Prepare2JHH.feature_cols()
+        feature_cols = Prepare2JHH.feature_cols()
     elif coupling_type == '2JHC' or coupling_type == '2JHN':
-        feature_cols =  Prepare2JH_.feature_cols()
+        feature_cols = Prepare2JH_.feature_cols()
     elif coupling_type == '3JHH':
-        feature_cols =  Prepare3JHH.feature_cols()
+        feature_cols = Prepare3JHH.feature_cols()
     elif coupling_type == '3JHC' or coupling_type == '3JHN':
-        feature_cols =  Prepare3JH_.feature_cols()
+        feature_cols = Prepare3JH_.feature_cols()
     else:
         raise ValueError(f'Unexpected coupling: {coupling_type}')
     return feature_cols
@@ -72,11 +72,29 @@ if __name__ == '__main__':
         x_train = train_df[feature_columns].values
         y_train = train_df['scalar_coupling_constant'].values
         ######################################## Hyperparameter tuning #################################################
-        # TODO: add this back at the end (temporarily removed)
+        params = {'n_estimators': [100, 300, 500],
+                  'max_depth': [10, 20, 30, 40, None],
+                  'min_samples_split': [2, 20, 50],
+                  'min_samples_leaf': [1, 20, 50, 100],
+                  'max_features': ['sqrt', 0.5, 'auto']}
+
+        clf = GridSearchCV(estimator=RandomForestRegressor(),
+                           param_grid=params,
+                           scoring='neg_mean_squared_error',
+                           n_jobs=-1,
+                           cv=4,
+                           verbose=1)
+
+        clf.fit(x_train, y_train)
+        score = clf.best_score_
+        scores[coupling_type] = score
+        print(f'Best MSE score: {score}')
+        print(f'Best parameters: {clf.best_params_}')
         ######################################## Train on all the data #################################################
-        model = RandomForestRegressor(
-            n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
-        )
+        # model = RandomForestRegressor(
+        #     n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
+        # )
+        model = clone(clf.best_estimator_)
         model.fit(x_train, y_train)
         models[coupling_type] = model
 
@@ -85,6 +103,9 @@ if __name__ == '__main__':
         for feature, importance in zip(feature_columns, model.feature_importances_):
             print(f'{feature}: {importance}')
             feature_importances[coupling_type][feature] = importance
+
+        # save the model off
+        write_pickle(model, os.path.join(ROOT_DIR, f'models/tuned_rf/rf_{coupling_type}.pkl'))
         ###################################### Prepare the testing data ################################################
         test_df = pd.read_csv(os.path.join(TEST_DIR, filename))
 
@@ -103,7 +124,6 @@ if __name__ == '__main__':
         print(f'Time elapsed: {elapsed_time} hours')
         total_time += elapsed_time
         ################################################################################################################
-
     print(f'\nTotal time elapsed: {total_time} hours')
     print('\nSaving the submissions...')
     write_pickle(models, os.path.join(ROOT_DIR, 'models/pairwise/rf_models.pkl'))
