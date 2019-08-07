@@ -7,7 +7,7 @@ import torch
 
 # import the chemistry packages
 from ase.atoms import Atoms as ase_atoms
-from dscribe.descriptors import ACSF, LMBTR
+from dscribe.descriptors import ACSF, LMBTR, SOAP
 from mendeleev import element
 from rdkit.Chem import Mol
 import rdkit.Chem.rdMolDescriptors as rdMD
@@ -185,6 +185,18 @@ class AtomCenteredSymmetryFeatures(DscribeAtomicFeatures):
                                  g3_params=g3_params,
                                  g4_params=g4_params,
                                  g5_params=g5_params)
+
+
+class SOAPFeatures(DscribeAtomicFeatures):
+    def __init__(self, molecule_map, r_cut, n_max, l_max, n_jobs=1):
+        super().__init__(molecule_map, n_jobs)
+        self.r_cut = r_cut
+        self.n_max = n_max
+        self.l_max = l_max
+        self.dscribe_func = SOAP(species=self.species, periodic=False, rcut=r_cut, nmax=n_max, lmax=l_max)
+
+    def __call__(self, molecule_name):
+        return super().__call__(molecule_name) / 1000
 
 
 class LocalManyBodyTensorFeatures(DscribeAtomicFeatures):
