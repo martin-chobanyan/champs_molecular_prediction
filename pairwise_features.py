@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from dtsckit.utils import read_pickle
 
-from chem_math import find_atomic_path, vectorized_dihedral_angle
+from chem_math import find_atomic_path, vectorized_dihedral_angle, bond_angle
 from features import encode_hybridization
 
 
@@ -107,6 +107,13 @@ def get_middle_atoms(molecule_map, molecule_name, start_atom_idx, end_atom_idx):
         return [-1, -1]
 
 
+def calculate_bond_angle(molecule_map, molecule_name, atom_0, atom_1, atom_2):
+    if atom_0 == -1 or atom_1 == -1 or atom_2 == -1:
+        return None
+    coords = molecule_map[molecule_name]['coords']
+    return bond_angle(coords[atom_0], coords[atom_1], coords[atom_2])
+
+
 def calculate_dihedral_angles(df, molecule_map, start_col, x_col, y_col, end_col, step=10000):
     # find the coordinates of each atom in the path
     coords = {start_col: [], x_col: [], y_col: [], end_col: []}
@@ -138,8 +145,6 @@ def calculate_dihedral_angles(df, molecule_map, start_col, x_col, y_col, end_col
 #                  Define the objects to extract the appropriate features from each coupling type
 ########################################################################################################################
 
-# TODO: add number of bonds per atom along the path
-# TODO: add the bond angle of every three pairs of atoms along the path (for 2J and 3J couplings)
 class FeatureEngineer(object):
     """A base class for the feature engineering objects across coupling types
 
@@ -278,11 +283,12 @@ class Prepare2JHH(FeatureEngineer):
     - gasteiger charges of H0, X, and H1
     - eem charges of H0, X, and H1
     - ring membership of atom X
+    - bond angle between atom 0, atom X, and atom 1
     """
 
     @staticmethod
     def feature_cols():
-        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen',
+        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen', 'bond_angle',
                                                  'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
                                                  'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'eem_charge_x', 'ring_x']
 
@@ -318,6 +324,12 @@ class Prepare2JHH(FeatureEngineer):
         # ring membership of atom X
         df = self.is_in_ring(df, 'atom_index_x', 'ring_x')
 
+        # calculate the bond angle between H-X-H
+        df['bond_angle'] = df.apply(lambda x: calculate_bond_angle(self.molecule_map,
+                                                                   x['molecule_name'],
+                                                                   x['atom_index_0'],
+                                                                   x['atom_index_x'],
+                                                                   x['atom_index_1']), axis=1)
         return df
 
 
@@ -388,6 +400,7 @@ class Prepare3JHH(FeatureEngineer):
                                                  'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
                                                  'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3', 'ring_x', 'ring_y',
                                                  'gcharge_x', 'gcharge_y', 'eem_charge_x', 'eem_charge_y',
+                                                 'bond_angle_0xy', 'bond_angle_xy1',
                                                  'dihedral', 'cos_theta', 'cos_2theta']
 
     def __call__(self, df):
@@ -430,6 +443,19 @@ class Prepare3JHH(FeatureEngineer):
 
         df = self.get_eem_charges(df, 'atom_index_x', 'eem_charge_x')
         df = self.get_eem_charges(df, 'atom_index_y', 'eem_charge_y')
+
+        # calculate the bond angle between H-X-Y
+        df['bond_angle_0xy'] = df.apply(lambda x: calculate_bond_angle(self.molecule_map,
+                                                                       x['molecule_name'],
+                                                                       x['atom_index_0'],
+                                                                       x['atom_index_x'],
+                                                                       x['atom_index_y']), axis=1)
+        # calculate the bond angle between X-Y-H
+        df['bond_angle_xy1'] = df.apply(lambda x: calculate_bond_angle(self.molecule_map,
+                                                                       x['molecule_name'],
+                                                                       x['atom_index_x'],
+                                                                       x['atom_index_y'],
+                                                                       x['atom_index_1']), axis=1)
 
         df = calculate_dihedral_angles(df, self.molecule_map, 'atom_index_0',
                                        'atom_index_x', 'atom_index_y', 'atom_index_1')

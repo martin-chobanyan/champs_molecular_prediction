@@ -63,6 +63,15 @@ def find_atomic_path(atom_0, atom_k, k=3, return_indices=True):
     return [atom.GetIdx() for atom in path] if return_indices else path
 
 
+def bond_angle(p0, p1, p2):
+    v0 = p0 - p1
+    v1 = p2 - p1
+    v1_norm = np.linalg.norm(v0)
+    v2_norm = np.linalg.norm(v1)
+    theta = np.arccos(np.dot(v0, v1) / (v1_norm * v2_norm))
+    return theta
+
+
 # Source: stackoverflow (Dihedral/Torsion Angle From Four Points in Cartesian Coordinates in Python)
 def dihedral_angle(p0, p1, p2, p3):
     """Praxeolitic formula, 1 sqrt, 1 cross product"""
