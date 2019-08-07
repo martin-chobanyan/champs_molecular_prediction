@@ -287,6 +287,8 @@ if __name__ == '__main__':
     TRAIN_DIR = os.path.join(ROOT_DIR, 'train')
     TEST_DIR = os.path.join(ROOT_DIR, 'test')
     MAX_MOL_SIZE = 29
+
+    print('Reading the molecular structures...')
     molecule_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
     num_molecules = len(molecule_map)
 
