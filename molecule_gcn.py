@@ -21,7 +21,7 @@ from dtsckit.utils import read_pickle, write_pickle
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv
+from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv, NNConv
 from torch_geometric.data import Data, DataLoader
 
 from features import ElementalFeatures, BaseAtomicFeatures, AtomCenteredSymmetryFeatures
@@ -135,7 +135,7 @@ class NodePairScorer(nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.map_input = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU())
+        self.map_input = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LeakyReLU())
         self.distmult = nn.Parameter(torch.rand(1, hidden_dim))
         self.gcn = None  # this attribute should be extended with the appropriate graph convolutions
 
@@ -158,7 +158,7 @@ class NodePairScorer(nn.Module):
         d = torch.repeat_interleave(self.distmult, num_pairs, 0)
         return torch.sum(d * x_i * x_j, dim=1)
 
-    def forward(self, x, edge_index, node_i, node_j):
+    def forward(self, x, edge_index, node_i, node_j, edge_attr=None):
         """Run the model (should not be directly called, only extended)
 
         Parameters
@@ -172,6 +172,9 @@ class NodePairScorer(nn.Module):
             A tensor with shape [num_pairs] defining the index of the first node in each of the node pairs.
         node_j: torch.LongTensor
             A tensor with shape [num_pairs] defining the index of the second node in each of the node pairs.
+        edge_attr: torch.Tensor
+            A tensor with shape [num_edges, num_edge_features] containing the features of each edge.
+            This should only be specified if the 'gcn' attribute uses edge labels (e.g. NNConv).
 
         Returns
         -------
@@ -179,7 +182,10 @@ class NodePairScorer(nn.Module):
             A tensor of shape [num_pairs] containing the scores of each node pair.
         """
         x = self.map_input(x)
-        x = self.gcn(x, edge_index)
+        if edge_attr is None:
+            x = self.gcn(x, edge_index)
+        else:
+            x = self.gcn(x, edge_index, edge_attr)
         scores = self.score_node_pairs(x[node_i], x[node_j])
         return scores
 
@@ -190,7 +196,7 @@ class GCNConvNodePairScorer(NodePairScorer):
         gcn_layers = []
         for _ in range(num_layers - 1):
             gcn_layers.append(GCNConv(hidden_dim, hidden_dim))
-            gcn_layers.append(nn.ReLU())
+            gcn_layers.append(nn.LeakyReLU())
         gcn_layers.append(GCNConv(hidden_dim, hidden_dim))
         self.gcn = GCNSequential(*gcn_layers)
 
@@ -198,8 +204,6 @@ class GCNConvNodePairScorer(NodePairScorer):
 class APPNPNodePairScorer(NodePairScorer):
     def __init__(self, input_dim, hidden_dim, k=10, alpha=0.1):
         super().__init__(input_dim, hidden_dim)
-        self.k = k
-        self.alpha = alpha
         self.gcn = APPNP(K=k, alpha=alpha)
 
 
@@ -211,9 +215,20 @@ class GATNodePairScorer(NodePairScorer):
         for _ in range(num_layers - 1):
             gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, dropout))
             if update_activation:
-                gcn_layers.append(nn.ReLU())
+                gcn_layers.append(nn.LeakyReLU())
         gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, dropout))
         self.gcn = GCNSequential(*gcn_layers)
+
+
+class NNConvNodePairScorer(NodePairScorer):
+    def __init__(self, input_dim, hidden_dim, edge_net, num_layers=1):
+        super().__init__(input_dim, hidden_dim)
+        gcn_layers = []
+        for _ in range(num_layers - 1):
+            gcn_layers.append(NNConv(input_dim, hidden_dim, nn=edge_net))
+            gcn_layers.append(nn.LeakyReLU())
+        self.gcn = GCNSequential(*gcn_layers)
+
 
 
 ########################################################################################################################
@@ -389,16 +404,16 @@ if __name__ == '__main__':
         for name, molecule_rows in tqdm(molecule_groups):
             num_atoms = molecule_map[name]['rdkit'].GetNumAtoms()
 
-            x, edge_index = mol_graph(name)
+            x, edges = mol_graph(name)
             idx, i, j = molecule_rows[['id', 'atom_index_0', 'atom_index_1']].values.T
 
             x = x.to(device)
-            edge_index = edge_index.to(device)
+            edges = edges.to(device)
             i = torch.LongTensor(i).to(device)
             j = torch.LongTensor(j).to(device)
 
             with torch.no_grad():
-                pred = model(x, edge_index, i, j)
+                pred = model(x, edges, i, j)
 
             row_ids.append(idx)
             preds.append(pred.cpu().numpy())
