@@ -4,6 +4,7 @@
 import os
 import re
 from argparse import ArgumentParser
+
 import numpy as np
 import pandas as pd
 from dtsckit.utils import read_pickle
@@ -496,37 +497,96 @@ class Prepare3JH_(Prepare3JHH):
         return df
 
 
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument('--mode', required=True, type=str, help='Specify training or testing mode')
-    args = parser.parse_args()
+########################################################################################################################
+#                              Helper functions to reset the current pairwise feature files
+########################################################################################################################
 
-    mode = args.mode
-    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
-    TARGET_DIR = os.path.join(ROOT_DIR, mode)
-    print(f'Pairwise feature extraction on {mode}ing files\n')
 
-    print('Reading the molecular structures...\n')
-    molec_struct_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
+def split_by_types(df, target_dir):
+    """Split a DataFrame by the 'type' feature and save each group as a separate CSV file
 
-    for filename in os.listdir(TARGET_DIR):
-        data = pd.read_csv(os.path.join(TARGET_DIR, filename))
+    Parameters
+    ----------
+    df: pd.DataFrame
+        The pandas DataFrame containing the overall data, with a 'type' column to group by
+    target_dir: str
+        The string directory path where the file will be stored as 'data_{type}.csv'
+    """
+    coupling_groups = df.groupby('type')
+    for coupling_type, data in coupling_groups:
+        filepath = os.path.join(target_dir, f'data_{coupling_type}.csv')
+        data.to_csv(filepath, index=False)
+
+
+def reset_files(root_dir):
+    """Replace the current pairwise feature files with the base features
+
+    Parameters
+    ----------
+    root_dir: str
+        The string directory path where the training and testing subdirectories can be found
+    """
+    train_df = pd.read_csv(os.path.join(root_dir, 'train.csv'))
+    train_dir = os.path.join(root_dir, 'train')
+    split_by_types(train_df, train_dir)
+
+    test_df = pd.read_csv(os.path.join(root_dir, 'test.csv'))
+    test_dir = os.path.join(root_dir, 'test')
+    split_by_types(test_df, test_dir)
+
+
+########################################################################################################################
+#                                                     Main routine
+########################################################################################################################
+
+
+def calculate_pairwise_features(target_dir, molecule_map):
+    for filename in os.listdir(target_dir):
+        filepath = os.path.join(target_dir, filename)
+        data = pd.read_csv(filepath)
+
         coupling_type, = re.findall(r'data_(.*)\.csv', filename)
         print(f'Coupling: {coupling_type}')
 
-        if coupling_type == '1JHC' or coupling_type == '1JHN':
-            data = Prepare1JH_(molec_struct_map)(data)
+        if coupling_type in ['1JHC', '1JHN']:
+            data = Prepare1JH_(molecule_map)(data)
         elif coupling_type == '2JHH':
-            data = Prepare2JHH(molec_struct_map)(data)
-        elif coupling_type == '2JHC' or coupling_type == '2JHN':
-            data = Prepare2JH_(molec_struct_map)(data)
+            data = Prepare2JHH(molecule_map)(data)
+        elif coupling_type in ['2JHC', '2JHN']:
+            data = Prepare2JH_(molecule_map)(data)
         elif coupling_type == '3JHH':
-            data = Prepare3JHH(molec_struct_map)(data)
-        elif coupling_type == '3JHC' or coupling_type == '3JHN':
-            data = Prepare3JH_(molec_struct_map)(data)
+            data = Prepare3JHH(molecule_map)(data)
+        elif coupling_type in ['3JHC', '3JHN']:
+            data = Prepare3JH_(molecule_map)(data)
         else:
             raise ValueError(f"Unexpected coupling type: '{coupling_type}'")
 
         print('Saving the file...\n')
-        data.to_csv(os.path.join(TARGET_DIR, filename), index=False)
+        data.to_csv(filepath, index=False)
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--reset', action='store_true', help='Resets the current pairwise feature files')
+    parser.add_argument('--train', action='store_true', help='Builds the pairwise features for the training files')
+    parser.add_argument('--test', action='store_true', help='Build the pairwise features for the testing files')
+
+    args = parser.parse_args()
+    reset = args.reset
+    train_mode = args.train
+    test_mode = args.test
+
+    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
+    if reset:
+        print('Resetting the training and testing pairwise features')
+        reset_files(ROOT_DIR)
+    if train_mode or test_mode:
+        print('Reading the molecular structures...\n')
+        molec_struct_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
+        if train_mode:
+            print(f'Pairwise feature extraction on training files\n')
+            calculate_pairwise_features(os.path.join(ROOT_DIR, 'train'), molec_struct_map)
+        if test_mode:
+            print(f'Pairwise feature extraction on testing files\n')
+            calculate_pairwise_features(os.path.join(ROOT_DIR, 'test'), molec_struct_map)
     print('Done!')
