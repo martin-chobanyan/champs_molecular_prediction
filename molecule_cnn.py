@@ -1,6 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+"""
+This file defines a standard convolutional approach to the problem:
+- Represent each molecule as matrices where each matrix captures an atomic interaction feature
+    e.g. atomic distance matrix and the Coulomb matrix
+- Pad these matrices so that they are the same shape for each molecule
+- Stack the matrices as channels of a "molecule volume"
+- Apply a CNN on the molecule volumes and then linearly map the feature maps to the prediction matrix
+- Extract the original non-padded shape from the prediction matrix and collect the appropriate coupling constants
+    i.e. predictions for target atoms i and j are at positions (i, j) or (j, i)
+"""
 import os
 import numpy as np
 import pandas as pd
@@ -22,11 +31,38 @@ MAX_MOL_SIZE = 29
 ########################################################################################################################
 
 class MoleculeRaster(object):
+    """Calculate each feature matrix for a molecule and stack them as a raster
+
+    Parameters
+    ----------
+    molecule_map: dict[str, dict]
+        The molecule structure map containing the structure and features of the molecule
+    transform: callable, optional
+        A callable object that can be applied on the stacked raster before returning
+    """
     def __init__(self, molecule_map, transform=None):
         self.molecule_map = molecule_map
         self.transform = transform
 
     def __call__(self, molecule_name):
+        """Calculate and stack the feature matrices
+
+        Currently there are four different feature matrices that are calculated:
+            - atomic distance matrix
+            - coulomb repulsion matrix
+            - connectivity matrix weighted by bond order
+            - cep matrix
+
+        Parameters
+        ----------
+        molecule_name: str
+
+        Returns
+        -------
+        np.ndarray
+            A numpy array of shape [4, n_atoms, n_atoms] where n_atoms is the number of atoms in the molecule
+            Note: the returned raster may not be a numpy array depending on the 'transform' used.
+        """
         molecule = self.molecule_map[molecule_name]
 
         distance_matrix = molecule['distance_matrix']
@@ -40,19 +76,49 @@ class MoleculeRaster(object):
         raster = np.stack([distance_matrix, coulomb_matrix, connectivity_matrix, cep_matrix])
         if self.transform is not None:
             raster = self.transform(raster)
-
         return raster
 
 
-def create_molecule_rasters(molecule_map, generate_raster):
+def create_molecule_rasters(generate_raster, molecule_names):
+    """Create the rasters for all molecules
+
+    Note: the purpose of this function is to create the rasters once instead of creating them on the fly
+
+    Parameters
+    ----------
+    generate_raster: callable
+        A callable object that takes a molecule name and returns a multi-channel raster (e.g. MoleculeRaster)
+    molecule_names: list[str]
+        A list of the molecule names as strings
+
+    Returns
+    -------
+    dict
+        A dictionary mapping each molecule name to its raster
+    """
     molecule_rasters = dict()
-    for name in tqdm(molecule_map.keys()):
+    for name in tqdm(molecule_names):
         if name != 'scalar_descriptor_keys':
             molecule_rasters[name] = generate_raster(name)
     return molecule_rasters
 
 
 def create_target_coupling_rasters(data, molecule_map):
+    """Create the target coupling matrices for each molecule
+
+    Parameters
+    ----------
+    data: pd.DataFrame
+        The pandas DataFrame where each row defines a pair of atoms and their coupling constant.
+        Includes columns for 'molecule_name', 'atom_index_0', 'atom_index_1', and 'scalar_coupling_constant'
+    molecule_map: dict[str, dict]
+        A dictionary mapping each molecule name to a dictionary containing its structure and features.
+
+    Returns
+    -------
+    dict
+        A dictionary mapping each molecule name to its target coupling matrix
+    """
     coupling_targets = dict()
     molecule_groups = data.groupby('molecule_name')
     for name, atom_pairs in tqdm(molecule_groups):
@@ -74,7 +140,22 @@ def create_target_coupling_rasters(data, molecule_map):
 
 
 def pad_raster(raster, dim):
-    """Pad a each channel of the raster to a dim x dim channel and return the inverse index"""
+    """Pad a each channel of the raster to a dim x dim channel and return the inverse index
+
+    Parameters
+    ----------
+    raster: torch.Tensor
+        A pytorch tensor representing the multi-channel raster
+    dim: int
+        The width/height dimensionality of each channel after padding
+
+    Returns
+    -------
+    padded_raster: torch.Tensor, inverse_idx: tuple[int, int]
+        The padded raster as pytorch tensor with shape [*, dim, dim] and a tuple of integer indices for retrieving the
+        feature from the original raster by subsetting each channel.
+        e.g. for raster x and inverse index (i, j), the original raster would be x[:, i:j, i:j]
+    """
     num_atoms = raster.shape[-1]
     padding = dim - num_atoms
 
@@ -84,7 +165,7 @@ def pad_raster(raster, dim):
 
     padded_channels = []
     for channel in raster:
-        channel = F.pad(channel, [left_pad, right_pad, left_pad, right_pad], mode='constant', value=0)
+        channel = F.pad(channel, (left_pad, right_pad, left_pad, right_pad), mode='constant', value=0)
         padded_channels.append(channel)
 
     padded_raster = torch.stack(padded_channels)
@@ -92,6 +173,24 @@ def pad_raster(raster, dim):
 
 
 class MoleculeRasterDataset(Dataset):
+    """A pytorch Dataset class that returns the molecule rasters and their respective target coupling matrix
+
+    Parameters
+    ----------
+    molecule_names: list[str]
+        The list of molecule names to index
+    x_map: dict
+        A dictionary mapping a molecule name to its multi-channel raster representation
+    y_map: dict
+        A dictionary mapping a molecule name to its target coupling matrix
+    max_mol_size: int, optional
+        The maximum number of atoms across all molecules.
+        All channels will be padded to this dimensionality (default=MAX_MOL_SIZE)
+    x_transform: callable, optional
+        A callable object that operates on the feature rasters
+    y_transform: callable, optional
+        A callable object that operates on the coupling matrix
+    """
     def __init__(self, molecule_names, x_map, y_map, max_mol_size=MAX_MOL_SIZE,
                  x_transform=None, y_transform=None):
         super().__init__()
@@ -127,6 +226,7 @@ class MoleculeRasterDataset(Dataset):
 
 
 class MoleculeCNN(nn.Module):
+    """The pytorch convolutional model that creates the predicted coupling matrix"""
     def __init__(self, raster_dim=MAX_MOL_SIZE):
         super().__init__()
         self.conv1 = nn.Conv2d(4, 16, 3, padding=1)
@@ -151,6 +251,7 @@ class MoleculeCNN(nn.Module):
 ########################################################################################################################
 
 def get_filled_cells(pred_raster, true_raster):
+    """Get the predictions for all cell values in the target matrix that are filled in (i.e. not zero)"""
     zero_mask = (true_raster != 0)
     return pred_raster[zero_mask], true_raster[zero_mask]
 
@@ -215,7 +316,7 @@ def run(root_dir, coupling, molecule_map):
     data = data[['id', 'molecule_name', 'atom_index_0', 'atom_index_1', 'scalar_coupling_constant']]
 
     mol_mat = MoleculeRaster(molecule_map)
-    molecule_rasters = create_molecule_rasters(molecule_map, mol_mat)
+    molecule_rasters = create_molecule_rasters(mol_mat, list(molecule_map.keys()))
     coupling_targets = create_target_coupling_rasters(data, molecule_map)
 
     molecule_names = list(coupling_targets.keys())
