@@ -21,7 +21,7 @@ from dtsckit.utils import read_pickle, write_pickle
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv, NNConv
+from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv, NNConv, EdgeConv
 from torch_geometric.data import Data, DataLoader
 
 from features import ElementalFeatures, BaseAtomicFeatures, AtomCenteredSymmetryFeatures
@@ -229,6 +229,16 @@ class NNConvNodePairScorer(NodePairScorer):
             gcn_layers.append(nn.LeakyReLU())
         self.gcn = GCNSequential(*gcn_layers)
 
+
+# TODO: experiment with a final linear layer that maps each feature into a smaller dimension --> then apply DistMult
+class EdgeConvNodePairScorer(NodePairScorer):
+    def __init__(self, input_dim, hidden_dim, node_pair_net, num_layers=1):
+        super().__init__(input_dim, hidden_dim)
+        gcn_layers = []
+        for _ in range(num_layers - 1):
+            gcn_layers.append(EdgeConv(nn=node_pair_net))
+            gcn_layers.append(nn.LeakyReLU())
+        self.gcn = GCNSequential(*gcn_layers)
 
 
 ########################################################################################################################
