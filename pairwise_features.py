@@ -27,14 +27,14 @@ def get_distance(molecule_map, molecule_name, a0, a1):
 
 def get_gasteiger_charge(molecule_map, molecule_name, atom_idx):
     if atom_idx == -1:
-        return -1000
+        return -1
     g_charge = molecule_map[molecule_name]['g_charges'][atom_idx]
     return g_charge
 
 
 def get_eem_charge(molecule_map, molecule_name, atom_idx):
     if atom_idx == -1:
-        return -1000
+        return -1
     eem_charge = molecule_map[molecule_name]['eem_charges'][atom_idx]
     return eem_charge
 
@@ -74,16 +74,16 @@ def find_hybridization(molecule_map, molec_name, atom_idx):
 def encode_inner_element(molecule_map, molec_name, atom_idx):
     """Determine and one-hot encode the element of an atom that is not on the peripheries of the molecule"""
     if atom_idx == -1:
-        return [-1, -1]
+        return [-1, -1, -1]
 
     molecule = molecule_map[molec_name]['rdkit']
     symbol = molecule.GetAtomWithIdx(atom_idx).GetSymbol()
     if symbol == 'C':
-        return [0, 0]
+        return [1, 0, 0]
     elif symbol == 'N':
-        return [1, 0]
+        return [0, 1, 0]
     elif symbol == 'O':
-        return [0, 1]
+        return [0, 0, 1]
     else:
         raise ValueError("'Inner atoms' must be carbons, nitrogens, or oxygens")
 
@@ -160,42 +160,48 @@ class FeatureEngineer(object):
 
     def get_distances(self, df, atom_i_col, atom_j_col, col_name):
         df[col_name] = df.apply(
-            lambda x: get_distance(self.molecule_map, x['molecule_name'], x[atom_i_col], x[atom_j_col]), axis=1)
+            lambda x: get_distance(self.molecule_map, x['molecule_name'], x[atom_i_col], x[atom_j_col]), axis=1
+        )
         return df
 
     def get_gasteiger_charges(self, df, atom_idx_col, col_name):
         df[col_name] = df.apply(
-            lambda x: get_gasteiger_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+            lambda x: get_gasteiger_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
         return df
 
     def get_eem_charges(self, df, atom_idx_col, col_name):
         df[col_name] = df.apply(
-            lambda x: get_eem_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+            lambda x: get_eem_charge(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
         return df
 
     def is_in_ring(self, df, atom_idx_col, col_name):
         df[col_name] = df.apply(
-            lambda x: get_ring_membership(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+            lambda x: get_ring_membership(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
         return df
 
     def get_neighbors(self, df, atom_idx_col, col_names):
         neighbors = df.apply(
-            lambda x: calculate_neighborhood(self.molecule_map, x['molecule_name'], x[atom_idx_col]),
-            axis=1)
+            lambda x: calculate_neighborhood(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
         neighbors = pd.DataFrame(neighbors.values.tolist(), columns=col_names)
         df = pd.concat([df, neighbors], axis=1)
         return df
 
     def get_hybridizations(self, df, atom_idx_col, col_names):
         hybridizations = df.apply(
-            lambda x: find_hybridization(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1)
+            lambda x: find_hybridization(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
         hybridizations = pd.DataFrame(hybridizations.values.tolist(), columns=col_names)
         df = pd.concat([df, hybridizations], axis=1)
         return df
 
     def get_element_encodings(self, df, atom_idx_col, col_names):
-        elements = df.apply(lambda x: encode_inner_element(self.molecule_map, x['molecule_name'], x[atom_idx_col]),
-                            axis=1)
+        elements = df.apply(
+            lambda x: encode_inner_element(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
         elements = pd.DataFrame(elements.values.tolist(), columns=col_names)
         df = pd.concat([df, elements], axis=1)
         return df
@@ -253,7 +259,7 @@ class Prepare1JH_(FeatureEngineer):
     @staticmethod
     def feature_cols():
         return FeatureEngineer.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
-                                                 'sp', 'sp2', 'sp3', 'ring_1']
+                                                 's', 'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -263,7 +269,7 @@ class Prepare1JH_(FeatureEngineer):
         df = self.get_neighbors(df, 'atom_index_1', neighbor_cols)
 
         # get the hybridization
-        hybrid_cols = ['sp', 'sp2', 'sp3']
+        hybrid_cols = ['s', 'sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
 
         # is the C/N atom in a ring?
@@ -289,9 +295,9 @@ class Prepare2JHH(FeatureEngineer):
 
     @staticmethod
     def feature_cols():
-        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_nitrogen', 'x_oxygen', 'bond_angle',
+        return FeatureEngineer.feature_cols() + ['distance_hx', 'x_carbon', 'x_nitrogen', 'x_oxygen', 'bond_angle',
                                                  'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
-                                                 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'eem_charge_x', 'ring_x']
+                                                 'x_s', 'x_sp', 'x_sp2', 'x_sp3', 'gcharge_x', 'eem_charge_x', 'ring_x']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -305,7 +311,7 @@ class Prepare2JHH(FeatureEngineer):
         df = self.get_distances(df, 'atom_index_0', 'atom_index_x', 'distance_hx')
 
         # get the one hot encoded element of atom X
-        x_element_cols = ['x_nitrogen', 'x_oxygen']
+        x_element_cols = ['x_carbon', 'x_nitrogen', 'x_oxygen']
         df = self.get_element_encodings(df, 'atom_index_x', x_element_cols)
 
         # get the neighbor distribution of atom X
@@ -313,7 +319,7 @@ class Prepare2JHH(FeatureEngineer):
         df = self.get_neighbors(df, 'atom_index_x', neighbor_cols)
 
         # get the hybridization of atom X
-        hybrid_cols = ['x_sp', 'x_sp2', 'x_sp3']
+        hybrid_cols = ['x_s', 'x_sp', 'x_sp2', 'x_sp3']
         df = self.get_hybridizations(df, 'atom_index_x', hybrid_cols)
 
         # get the gasteiger charge of middle atom X
@@ -350,7 +356,7 @@ class Prepare2JH_(Prepare2JHH):
     def feature_cols():
         base_cols = Prepare2JHH.feature_cols()
         return base_cols + ['distance_x_', 'H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
-                            'sp', 'sp2', 'sp3', 'ring_1']
+                            's', 'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -360,7 +366,7 @@ class Prepare2JH_(Prepare2JHH):
         neighbor_cols = ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'F_neighbors']
         df = self.get_neighbors(df, 'atom_index_1', neighbor_cols)
 
-        hybrid_cols = ['sp', 'sp2', 'sp3']
+        hybrid_cols = ['s', 'sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
 
         df = self.is_in_ring(df, 'atom_index_1', 'ring_1')
@@ -396,10 +402,13 @@ class Prepare3JHH(FeatureEngineer):
     def feature_cols():
         return FeatureEngineer.feature_cols() + ['distance_0x', 'distance_xy',
                                                  'distance_y1', 'distance_0y', 'distance_x1',
-                                                 'x_nitrogen', 'x_oxygen', 'y_nitrogen', 'y_oxygen',
+                                                 'x_carbon', 'x_nitrogen', 'x_oxygen',
+                                                 'y_carbon', 'y_nitrogen', 'y_oxygen',
                                                  'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
                                                  'y_H_neighbors', 'y_C_neighbors', 'y_N_neighbors', 'y_O_neighbors',
-                                                 'x_sp', 'x_sp2', 'x_sp3', 'y_sp', 'y_sp2', 'y_sp3', 'ring_x', 'ring_y',
+                                                 'x_s', 'x_sp', 'x_sp2', 'x_sp3',
+                                                 'y_s', 'y_sp', 'y_sp2', 'y_sp3',
+                                                 'ring_x', 'ring_y',
                                                  'gcharge_x', 'gcharge_y', 'eem_charge_x', 'eem_charge_y',
                                                  'bond_angle_0xy', 'bond_angle_xy1',
                                                  'dihedral', 'cos_theta', 'cos_2theta']
@@ -421,8 +430,8 @@ class Prepare3JHH(FeatureEngineer):
         df = self.get_distances(df, 'atom_index_0', 'atom_index_y', 'distance_0y')
         df = self.get_distances(df, 'atom_index_x', 'atom_index_1', 'distance_x1')
 
-        x_element_cols = ['x_nitrogen', 'x_oxygen']
-        y_element_cols = ['y_nitrogen', 'y_oxygen']
+        x_element_cols = ['x_carbon', 'x_nitrogen', 'x_oxygen']
+        y_element_cols = ['y_carbon', 'y_nitrogen', 'y_oxygen']
         df = self.get_element_encodings(df, 'atom_index_x', x_element_cols)
         df = self.get_element_encodings(df, 'atom_index_y', y_element_cols)
 
@@ -431,8 +440,8 @@ class Prepare3JHH(FeatureEngineer):
         df = self.get_neighbors(df, 'atom_index_x', x_neighbor_cols)
         df = self.get_neighbors(df, 'atom_index_y', y_neighbor_cols)
 
-        x_hybrid_cols = ['x_sp', 'x_sp2', 'x_sp3']
-        y_hybrid_cols = ['y_sp', 'y_sp2', 'y_sp3']
+        x_hybrid_cols = ['x_s', 'x_sp', 'x_sp2', 'x_sp3']
+        y_hybrid_cols = ['y_s', 'y_sp', 'y_sp2', 'y_sp3']
         df = self.get_hybridizations(df, 'atom_index_x', x_hybrid_cols)
         df = self.get_hybridizations(df, 'atom_index_y', y_hybrid_cols)
 
@@ -481,7 +490,7 @@ class Prepare3JH_(Prepare3JHH):
     @staticmethod
     def feature_cols():
         return Prepare3JHH.feature_cols() + ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors',
-                                             'sp', 'sp2', 'sp3', 'ring_1']
+                                             's', 'sp', 'sp2', 'sp3', 'ring_1']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -489,7 +498,7 @@ class Prepare3JH_(Prepare3JHH):
         neighbor_cols = ['H_neighbors', 'C_neighbors', 'N_neighbors', 'O_neighbors', 'F_neighbors']
         df = self.get_neighbors(df, 'atom_index_1', neighbor_cols)
 
-        hybrid_cols = ['sp', 'sp2', 'sp3']
+        hybrid_cols = ['s', 'sp', 'sp2', 'sp3']
         df = self.get_hybridizations(df, 'atom_index_1', hybrid_cols)
 
         df = self.is_in_ring(df, 'atom_index_1', 'ring_1')
