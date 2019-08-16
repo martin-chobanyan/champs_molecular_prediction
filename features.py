@@ -5,12 +5,14 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 import torch
 
-# import the chemistry packages
 from ase.atoms import Atoms as ase_atoms
 from dscribe.descriptors import ACSF, LMBTR, SOAP
 from mendeleev import element
 from rdkit.Chem import Mol
 import rdkit.Chem.rdMolDescriptors as rdMD
+
+
+MAX_DISTANCE = 12.040386089286708
 
 
 ########################################################################################################################
@@ -117,20 +119,38 @@ def calculate_coulomb_matrix(molecule, distance_matrix):
 
 
 ########################################################################################################################
-#                                           Define elemental features
+#                                             Define edge features
 ########################################################################################################################
 
 
-class ElementalFeatures(object):
-    def __init__(self):
-        self.elements = {'H': element('H'), 'C': element('C'), 'N': element('N'), 'O': element('O'), 'F': element('F')}
+class EdgeFeatures(object):
+    def __init__(self, molecule_map, max_distance=MAX_DISTANCE):
+        self.molecule_map = molecule_map
+        self.max_distance = max_distance
 
-    def __call__(self, symbol):
-        e = self.elements[symbol]
-        features = [e.atomic_number, e.atomic_radius_rahm, e.atomic_volume, e.c6_gb, e.covalent_radius_pyykko,
-                    e.density, e.dipole_polarizability, e.electron_affinity, e.en_pauling, e.heat_of_formation,
-                    int(e.is_monoisotopic is not None), e.thermal_conductivity, e.vdw_radius]
-        return features
+    def __call__(self, molecule_name):
+        edge_features = []
+        molecule = self.molecule_map[molecule_name]
+        molecule_obj = molecule['rdkit']
+        edge_index = molecule['bonds']
+        distances = molecule['distance_matrix']
+
+        for i, j in edge_index.transpose(1, 0).tolist():
+            bond = molecule_obj.GetBondBetweenAtoms(i, j)
+            begin_atom = bond.GetBeginAtom()
+            end_atom = bond.GetEndAtom()
+
+            features = encode_bond_order(str(bond.GetBondType()))
+            features += encode_element(begin_atom.GetSymbol())
+            features += encode_element(end_atom.GetSymbol())
+
+            d = distances[i, j]
+            features.append(d / self.max_distance)
+
+            features.append((begin_atom.GetAtomicNum() * end_atom.GetAtomicNum()) / (81 * d))
+            edge_features.append(features)
+
+        return np.array(edge_features)
 
 
 ########################################################################################################################
@@ -141,16 +161,26 @@ class ElementalFeatures(object):
 class BaseAtomicFeatures(object):
     def __init__(self, molecule_map):
         self.molecule_map = molecule_map
+        self.elements = {'H': element('H'), 'C': element('C'), 'N': element('N'), 'O': element('O'), 'F': element('F')}
 
     def __call__(self, molecule_name):
         atomic_features = []
         molecule = self.molecule_map[molecule_name]
+        symbols = molecule['symbols']
         gasteiger_charges = molecule['g_charges']
         eem_charges = molecule['eem_charges']
         for i, atom in enumerate(molecule['rdkit'].GetAtoms()):
             features = [gasteiger_charges[i], eem_charges[i]]
             features += encode_hybridization(str(atom.GetHybridization()))
-            features += [atom.IsInRing()]
+            features += [atom.IsInRingSize(ring_size) for ring_size in range(3, 10)]
+
+            # add elemental features of the atom and normalize them with hardcoded maximums
+            e = self.elements[symbols[i]]
+            features.append(e.atomic_number / 9)
+            features.append(e.en_pauling / 3.98)
+            features.append(e.atomic_radius_rahm / 190)
+            features.append(e.dipole_polarizability / 11.3)
+
             atomic_features.append(features)
         return np.array(atomic_features)
 
@@ -317,14 +347,42 @@ def get_unique_hybridizations(molec_struct_map):
     return hybridization_set
 
 
+def encode_element(symbol):
+    if symbol == 'H':
+        return [1, 0, 0, 0, 0]
+    elif symbol == 'C':
+        return [0, 1, 0, 0, 0]
+    elif symbol == 'N':
+        return [0, 0, 1, 0, 0]
+    elif symbol == 'O':
+        return [0, 0, 0, 1, 0]
+    elif symbol == 'F':
+        return [0, 0, 0, 0, 1]
+    else:
+        raise ValueError(f'Encountered an unexpected element: {symbol}')
+
+
 def encode_hybridization(hybridization):
     if hybridization == 'S':
-        return [0, 0, 0]
+        return [1, 0, 0, 0]
     elif hybridization == 'SP':
-        return [1, 0, 0]
+        return [0, 1, 0, 0]
     elif hybridization == 'SP2':
-        return [0, 1, 0]
+        return [0, 0, 1, 0]
     elif hybridization == 'SP3':
-        return [0, 0, 1]
+        return [0, 0, 0, 1]
     else:
-        raise ValueError(f'Encountered a new hybridization: {hybridization}')
+        raise ValueError(f'Encountered an unexpected hybridization: {hybridization}')
+
+
+def encode_bond_order(bond_order):
+    if bond_order == 'SINGLE' or bond_order == 1:
+        return [1, 0, 0, 0]
+    elif bond_order == 'AROMATIC' or bond_order == 1.5:
+        return [0, 1, 0, 0]
+    elif bond_order == 'DOUBLE' or bond_order == 2:
+        return [0, 0, 1, 0]
+    elif bond_order == 'TRIPLE' or bond_order == 3:
+        return [0, 0, 0, 1]
+    else:
+        raise ValueError(f'Encountered an unexpected bond order: {bond_order}')
