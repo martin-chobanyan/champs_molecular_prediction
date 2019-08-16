@@ -169,10 +169,13 @@ class BaseAtomicFeatures(object):
         symbols = molecule['symbols']
         gasteiger_charges = molecule['g_charges']
         eem_charges = molecule['eem_charges']
+        mul_charges = molecule['m_charges'] if 'm_charges' in molecule else None
+        shields = molecule['symmetric_tensor_shields'] if 'symmetric_tensor_shields' in molecule else None
         for i, atom in enumerate(molecule['rdkit'].GetAtoms()):
-            features = [gasteiger_charges[i], eem_charges[i]]
+            features = [gasteiger_charges[i], eem_charges[i], mul_charges[i]]
+            features += list(shields[i])
             features += encode_hybridization(str(atom.GetHybridization()))
-            features += [atom.IsInRingSize(ring_size) for ring_size in range(3, 10)]
+            features += [int(atom.IsInRingSize(ring_size)) for ring_size in range(3, 10)]
 
             # add elemental features of the atom and normalize them with hardcoded maximums
             e = self.elements[symbols[i]]
