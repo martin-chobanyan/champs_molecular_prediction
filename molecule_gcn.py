@@ -24,7 +24,7 @@ from torch.optim import Adam
 from torch_geometric.nn import MessagePassing, GCNConv, APPNP, GATConv, NNConv, EdgeConv
 from torch_geometric.data import Data, DataLoader
 
-from features import ElementalFeatures, BaseAtomicFeatures, AtomCenteredSymmetryFeatures
+from features import BaseAtomicFeatures, AtomCenteredSymmetryFeatures
 from pairwise_predictions import process_filename
 
 
@@ -39,10 +39,8 @@ class MoleculeGraph(object):
                  base_atomic_features=None,
                  acsf=None,
                  soap=None,
-                 lmbtr=None,
-                 elemental_features=False):
+                 lmbtr=None):
         self.molecule_map = molecule_map
-        self.element_features = ElementalFeatures() if elemental_features else None
         self.atomic_features = base_atomic_features
         self.acsf = acsf
         self.soap = soap
@@ -50,11 +48,6 @@ class MoleculeGraph(object):
 
     def __call__(self, name):
         features = []
-        if self.element_features is not None:
-            symbols = self.molecule_map[name]['symbols']
-            elemental_features = [self.element_features(s) for s in symbols]
-            features.append(torch.Tensor(elemental_features))
-
         if self.atomic_features is not None:
             features.append(torch.Tensor(self.atomic_features(name)))
 
@@ -81,12 +74,14 @@ def create_molecule_graphs(molecule_map, generate_mol_graph):
 
 
 class MoleculeData(object):
-    def __init__(self, mol_graph, df):
+    def __init__(self, mol_graph, df, edge_map=None):
         self.mol_graph = mol_graph
+        self.edge_map = edge_map
         self.df = df
 
     def __call__(self, name):
         x, edge_index = self.mol_graph[name]
+        edge_attr = torch.FloatTensor(self.edge_map(name)) if self.edge_map is not None else torch.FloatTensor([])
         num_atoms = torch.LongTensor([x.shape[0]])
 
         molecule_rows = self.df.loc[self.df['molecule_name'] == name]
@@ -94,10 +89,13 @@ class MoleculeData(object):
         couplings = torch.FloatTensor(molecule_rows['scalar_coupling_constant'].values)
         num_couplings = torch.LongTensor([len(couplings)])
 
-        data = Data(x=x, edge_index=edge_index,
-                    atom_pairs=atom_pairs, couplings=couplings,
-                    num_atoms=num_atoms, num_couplings=num_couplings)
-        return data
+        return Data(x=x,
+                    edge_index=edge_index,
+                    edge_attr=edge_attr,
+                    atom_pairs=atom_pairs,
+                    couplings=couplings,
+                    num_atoms=num_atoms,
+                    num_couplings=num_couplings)
 
 
 ########################################################################################################################
@@ -129,13 +127,15 @@ class NodePairScorer(nn.Module):
         The initial dimension of the node representations.
     hidden_dim: int
         The dimension of the node representation in the hidden layers.
+    dropout: float
+        The dropout probability to apply to the input fully connected layer (default=0; no dropout)
     """
 
-    def __init__(self, input_dim, hidden_dim):
+    def __init__(self, input_dim, hidden_dim, dropout=0.0):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.map_input = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LeakyReLU())
+        self.map_input = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LeakyReLU(), nn.Dropout(dropout))
         self.distmult = nn.Parameter(torch.rand(1, hidden_dim))
         self.gcn = None  # this attribute should be extended with the appropriate graph convolutions
 
@@ -191,8 +191,8 @@ class NodePairScorer(nn.Module):
 
 
 class GCNConvNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, num_layers=1):
-        super().__init__(input_dim, hidden_dim)
+    def __init__(self, input_dim, hidden_dim, num_layers=1, dropout=0):
+        super().__init__(input_dim, hidden_dim, dropout)
         gcn_layers = []
         for _ in range(num_layers - 1):
             gcn_layers.append(GCNConv(hidden_dim, hidden_dim))
@@ -202,38 +202,37 @@ class GCNConvNodePairScorer(NodePairScorer):
 
 
 class APPNPNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, k=10, alpha=0.1):
-        super().__init__(input_dim, hidden_dim)
+    def __init__(self, input_dim, hidden_dim, k=10, alpha=0.1, dropout=0):
+        super().__init__(input_dim, hidden_dim, dropout)
         self.gcn = APPNP(K=k, alpha=alpha)
 
 
 class GATNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, num_layers=1, heads=1, concat_heads=True, leaky_slope=0.2, dropout=0,
-                 update_activation=True):
-        super().__init__(input_dim, hidden_dim)
+    def __init__(self, input_dim, hidden_dim, num_layers=1, heads=1, concat_heads=True, leaky_slope=0.2, gat_dropout=0,
+                 update_activation=True, input_dropout=0):
+        super().__init__(input_dim, hidden_dim, input_dropout)
         gcn_layers = []
         for _ in range(num_layers - 1):
-            gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, dropout))
+            gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, gat_dropout))
             if update_activation:
                 gcn_layers.append(nn.LeakyReLU())
-        gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, dropout))
+        gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, gat_dropout))
         self.gcn = GCNSequential(*gcn_layers)
 
 
 class NNConvNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, edge_net, num_layers=1):
-        super().__init__(input_dim, hidden_dim)
+    def __init__(self, input_dim, hidden_dim, edge_net, num_layers=1, dropout=0):
+        super().__init__(input_dim, hidden_dim, dropout)
         gcn_layers = []
         for _ in range(num_layers - 1):
-            gcn_layers.append(NNConv(input_dim, hidden_dim, nn=edge_net))
+            gcn_layers.append(NNConv(hidden_dim, hidden_dim, nn=edge_net))
             gcn_layers.append(nn.LeakyReLU())
         self.gcn = GCNSequential(*gcn_layers)
 
 
-# TODO: experiment with a final linear layer that maps each feature into a smaller dimension --> then apply DistMult
 class EdgeConvNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, node_pair_net, num_layers=1):
-        super().__init__(input_dim, hidden_dim)
+    def __init__(self, input_dim, hidden_dim, node_pair_net, num_layers=1, dropout=0):
+        super().__init__(input_dim, hidden_dim, dropout)
         gcn_layers = []
         for _ in range(num_layers - 1):
             gcn_layers.append(EdgeConv(nn=node_pair_net))
@@ -270,20 +269,19 @@ def update_batch_atom_pairs(batch):
 def train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     avg_keeper = AverageKeeper()
+    use_edge_attr = isinstance(model, NNConvNodePairScorer)
     for batch in dataloader:
         update_batch_atom_pairs(batch)
-        node_features = batch.x.to(device)
-        edge_index = batch.edge_index.to(device)
-        atom_pairs = batch.atom_pairs.to(device)
-        couplings = batch.couplings.to(device)
-
+        batch = batch.to(device)
         optimizer.zero_grad()
-        pred = model(node_features, edge_index, atom_pairs[:, 0], atom_pairs[:, 1])
-        loss = criterion(pred, couplings)
+        if use_edge_attr:
+            pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1], batch.edge_attr)
+        else:
+            pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1])
+        loss = criterion(pred, batch.couplings)
         loss.backward()
         optimizer.step()
         avg_keeper.add(loss)
-
     avg_loss = avg_keeper.calculate()
     return avg_loss
 
@@ -291,18 +289,17 @@ def train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device):
 def validate_molecule_gcn_epoch(model, dataloader, criterion, device):
     model.eval()
     avg_keeper = AverageKeeper()
+    use_edge_attr = isinstance(model, NNConvNodePairScorer)
     with torch.no_grad():
         for batch in dataloader:
             update_batch_atom_pairs(batch)
-            node_features = batch.x.to(device)
-            edge_index = batch.edge_index.to(device)
-            atom_pairs = batch.atom_pairs.to(device)
-            couplings = batch.couplings.to(device)
-
-            pred = model(node_features, edge_index, atom_pairs[:, 0], atom_pairs[:, 1])
-            loss = criterion(pred, couplings)
+            batch = batch.to(device)
+            if use_edge_attr:
+                pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1], batch.edge_attr)
+            else:
+                pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1])
+            loss = criterion(pred, batch.couplings)
             avg_keeper.add(loss)
-
     avg_loss = avg_keeper.calculate()
     return avg_loss
 
@@ -312,49 +309,55 @@ if __name__ == '__main__':
     TRAIN_DIR = os.path.join(ROOT_DIR, 'train')
     TEST_DIR = os.path.join(ROOT_DIR, 'test')
     MAX_MOL_SIZE = 29
+    model_name = 'edgeconv'
 
     print('Reading the molecular structures...')
     molecule_map = read_pickle(os.path.join(ROOT_DIR, 'molecular_structure_map.pkl'))
     num_molecules = len(molecule_map)
 
-    submission_filepath = os.path.join(ROOT_DIR, 'submissions/gat_submission.csv')
+    submission_filepath = os.path.join(ROOT_DIR, f'submissions/{model_name}_submission.csv')
     submission_df = pd.read_csv(os.path.join(ROOT_DIR, 'submissions/submission.csv'))
     submission_df['scalar_coupling_constant'] = 0
     submission_df.index = submission_df['id'].values
 
     ###################################### Define the local molecular descriptors ######################################
-    r_c = 0.0
-    for name in molecule_map:
-        if 'scalar' not in name:
-            distances = molecule_map[name]['distance_matrix']
-            r_c = max(r_c, distances.max())
+    # r_c = 0.0
+    # for name in molecule_map:
+    #     if 'scalar' not in name:
+    #         distances = molecule_map[name]['distance_matrix']
+    #         r_c = max(r_c, distances.max())
+    #
+    # # Configure the "Atom-centered symmetry functions"
+    # # G2 - eta/Rs couples:
+    # g2_params = []
+    # for eta in [0.01, 0.1, 0.5, 1]:
+    #     for rs in [2, 6]:
+    #         g2_params.append((eta, rs))
+    # # G4 - eta/ksi/lambda triplets:
+    # g4_params = []
+    # for eta in [0.01, 0.1, 0.5, 1]:
+    #     for zeta in [4]:
+    #         for lambda_exp in [-1, 1]:
+    #             g4_params.append((eta, zeta, lambda_exp))
 
-    # Configure the "Atom-centered symmetry functions"
-
-    # G2 - eta/Rs couples:
-    g2_params = []
-    for eta in [0.01, 0.1, 0.5, 1]:
-        for rs in [2, 6]:
-            g2_params.append((eta, rs))
-
-    # G4 - eta/ksi/lambda triplets:
-    g4_params = []
-    for eta in [0.01, 0.1, 0.5, 1]:
-        for zeta in [4]:
-            for lambda_exp in [-1, 1]:
-                g4_params.append((eta, zeta, lambda_exp))
-
-    base_features = BaseAtomicFeatures(molecule_map)
-    acsf = AtomCenteredSymmetryFeatures(molecule_map, r_c, g2_params=g2_params, g4_params=g4_params)
-    mol_graph = MoleculeGraph(molecule_map, base_features, acsf)
+    # base_features = BaseAtomicFeatures(molecule_map)
+    # acsf = AtomCenteredSymmetryFeatures(molecule_map, r_c, g2_params=g2_params, g4_params=g4_params)
+    # mol_graph = MoleculeGraph(molecule_map, base_features, acsf)
 
     print('Creating the molecule features:')
-    mol_graphs = create_molecule_graphs(molecule_map, mol_graph)
+    # mol_graphs = create_molecule_graphs(molecule_map, mol_graph)
+    mol_graphs = dict()
+    acsf_features = read_pickle('/home/mchobanyan/data/kaggle/molecules/acsf_features.pkl')
+    lmbtr_features = read_pickle('/home/mchobanyan/data/kaggle/molecules/lmbtr_features.pkl')
+    for name in tqdm(molecule_map.keys()):
+        if name != 'scalar_descriptor_keys':
+            x1, e = acsf_features[name]
+            x2 = torch.Tensor(lmbtr_features[name])
+            mol_graphs[name] = torch.cat([x1, x2], dim=1), e
 
     num_features = mol_graphs['dsgdb9nsd_000011'][0].shape[1]
     print(f'number of features: {num_features}')
     ####################################################################################################################
-
     models = dict()
     scores = dict()
     feature_importances = dict()
@@ -383,13 +386,17 @@ if __name__ == '__main__':
         for name in tqdm(molecule_names):
             data_list.append(graphs(name))
 
-        dataloader = DataLoader(data_list, batch_size=128, shuffle=True)
+        dataloader = DataLoader(data_list, batch_size=512, shuffle=True)
 
         ##################################### Define and train the model ###############################################
         num_layers = 3
-        hidden_dim = 300
+        hidden_dim = 1000  # previously 300
         device = torch.device('cuda')
-        model = GATNodePairScorer(num_features, hidden_dim, num_layers, heads=8, concat_heads=False)
+        node_pair_net = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim), nn.LeakyReLU(), nn.Linear(hidden_dim, hidden_dim)
+        )
+        model = EdgeConvNodePairScorer(num_features, hidden_dim, node_pair_net, num_layers)
+
         model = model.to(device)
         criterion = nn.MSELoss()
         optimizer = Adam(model.parameters(), lr=0.0005)
@@ -414,7 +421,7 @@ if __name__ == '__main__':
         for name, molecule_rows in tqdm(molecule_groups):
             num_atoms = molecule_map[name]['rdkit'].GetNumAtoms()
 
-            x, edges = mol_graph(name)
+            x, edges = mol_graphs[name]
             idx, i, j = molecule_rows[['id', 'atom_index_0', 'atom_index_1']].values.T
 
             x = x.to(device)
@@ -439,6 +446,6 @@ if __name__ == '__main__':
 
     print(f'\nTotal time elapsed: {total_time} hours')
     print('\nSaving the submissions...')
-    write_pickle(models, os.path.join(ROOT_DIR, 'models/pairwise/gat_models.pkl'))
+    write_pickle(models, os.path.join(ROOT_DIR, f'models/gcn/{model_name}_models.pkl'))
     submission_df.to_csv(submission_filepath, index=False)
     print('Done!')
