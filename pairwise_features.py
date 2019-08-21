@@ -46,6 +46,13 @@ def get_mulliken_charge(molecule_map, molecule_name, atom_idx):
     return m_charge
 
 
+def get_tensor_shield(molecule_map, molecule_name, atom_idx):
+    if atom_idx == -1:
+        return [-1, -1, -1]
+    tensor_shields = molecule_map[molecule_name]['symmetric_tensor_shields'][atom_idx]
+    return list(tensor_shields)
+
+
 def get_ring_membership(molecule_map, molecule_name, atom_idx):
     if atom_idx == -1:
         return -1
@@ -189,6 +196,14 @@ class FeatureEngineer(object):
         )
         return df
 
+    def get_tensor_shields(self, df, atom_idx_col, col_names):
+        tensor_shields = df.apply(
+            lambda x: get_tensor_shield(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
+        )
+        tensor_shields = pd.DataFrame(tensor_shields.values.tolist(), columns=col_names)
+        df = pd.concat([df, tensor_shields], axis=1)
+        return df
+
     def is_in_ring(self, df, atom_idx_col, col_name):
         df[col_name] = df.apply(
             lambda x: get_ring_membership(self.molecule_map, x['molecule_name'], x[atom_idx_col]), axis=1
@@ -239,7 +254,9 @@ class FeatureEngineer(object):
 
         return ['distance', 'gcharge_0', 'gcharge_1',
                 'eem_charge_0', 'eem_charge_1',
-                'mcharge_0', 'mcharge_1'] + scalar_descriptor_cols
+                'mcharge_0', 'mcharge_1',
+                'xx_tensor_0', 'yy_tensor_0', 'zz_tensor_0',
+                'xx_tensor_1', 'yy_tensor_1', 'zz_tensor_1'] + scalar_descriptor_cols
 
     def __call__(self, df):
         """Get the distance between the atom pairs
@@ -260,6 +277,8 @@ class FeatureEngineer(object):
         df = self.get_mulliken_charges(df, 'atom_index_0', 'mcharge_0')
         df = self.get_mulliken_charges(df, 'atom_index_1', 'mcharge_1')
         df = self.get_scalar_descriptors(df)
+        df = self.get_tensor_shields(df, 'atom_index_0', ['xx_tensor_0', 'yy_tensor_0', 'zz_tensor_0'])
+        df = self.get_tensor_shields(df, 'atom_index_1', ['xx_tensor_1', 'yy_tensor_1', 'zz_tensor_1'])
         return df
 
 
@@ -307,6 +326,7 @@ class Prepare2JHH(FeatureEngineer):
     - gasteiger charges of H0, X, and H1
     - eem charges of H0, X, and H1
     - mulliken charge of H0, X, and H1
+    - tensor shields of H0, X, and H1
     - ring membership of atom X
     - bond angle between atom 0, atom X, and atom 1
     """
@@ -316,7 +336,8 @@ class Prepare2JHH(FeatureEngineer):
         return FeatureEngineer.feature_cols() + ['distance_hx', 'x_carbon', 'x_nitrogen', 'x_oxygen', 'bond_angle',
                                                  'x_H_neighbors', 'x_C_neighbors', 'x_N_neighbors', 'x_O_neighbors',
                                                  'x_s', 'x_sp', 'x_sp2', 'x_sp3',
-                                                 'gcharge_x', 'eem_charge_x', 'mcharge_x', 'ring_x']
+                                                 'gcharge_x', 'eem_charge_x', 'mcharge_x',
+                                                 'ring_x', 'xx_tensor_x', 'yy_tensor_x', 'zz_tensor_x']
 
     def __call__(self, df):
         df = super().__call__(df)
@@ -349,6 +370,9 @@ class Prepare2JHH(FeatureEngineer):
 
         # get the mulliken charge of middle atom X
         df = self.get_mulliken_charges(df, 'atom_index_x', 'mcharge_x')
+
+        # get the tensor shields of middle atom X
+        df = self.get_tensor_shields(df, 'atom_index_x', ['xx_tensor_x', 'yy_tensor_x', 'zz_tensor_x'])
 
         # ring membership of atom X
         df = self.is_in_ring(df, 'atom_index_x', 'ring_x')
@@ -416,6 +440,7 @@ class Prepare3JHH(FeatureEngineer):
     - gasteiger charges of H0, X, Y, H1
     - eem charges of H0, X, Y, H1
     - mulliken charge of H0, X, Y, H1
+    - tensor shields of H0, X, Y, H1
     - dihedral angle
     - cos(theta)
     - cos(2*theta)
@@ -435,6 +460,8 @@ class Prepare3JHH(FeatureEngineer):
                                                  'gcharge_x', 'gcharge_y',
                                                  'eem_charge_x', 'eem_charge_y',
                                                  'mcharge_x', 'mcharge_y',
+                                                 'xx_tensor_x', 'yy_tensor_x', 'zz_tensor_x',
+                                                 'xx_tensor_y', 'yy_tensor_y', 'zz_tensor_y',
                                                  'bond_angle_0xy', 'bond_angle_xy1',
                                                  'dihedral', 'cos_theta', 'cos_2theta']
 
@@ -481,6 +508,9 @@ class Prepare3JHH(FeatureEngineer):
 
         df = self.get_mulliken_charges(df, 'atom_index_x', 'mcharge_x')
         df = self.get_mulliken_charges(df, 'atom_index_y', 'mcharge_y')
+
+        df = self.get_tensor_shields(df, 'atom_index_x', ['xx_tensor_x', 'yy_tensor_x', 'zz_tensor_x'])
+        df = self.get_tensor_shields(df, 'atom_index_y', ['xx_tensor_y', 'yy_tensor_y', 'zz_tensor_y'])
 
         # calculate the bond angle between H-X-Y
         df['bond_angle_0xy'] = df.apply(lambda x: calculate_bond_angle(self.molecule_map,

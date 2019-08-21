@@ -72,29 +72,28 @@ if __name__ == '__main__':
         x_train = train_df[feature_columns].values
         y_train = train_df['scalar_coupling_constant'].values
         ######################################## Hyperparameter tuning #################################################
-        params = {'n_estimators': [100, 300, 500],
-                  'max_depth': [10, 20, 30, 40, None],
-                  'min_samples_split': [2, 20, 50],
-                  'min_samples_leaf': [1, 20, 50, 100],
-                  'max_features': ['sqrt', 0.5, 'auto']}
-
-        clf = GridSearchCV(estimator=RandomForestRegressor(),
-                           param_grid=params,
-                           scoring='neg_mean_squared_error',
-                           n_jobs=-1,
-                           cv=4,
-                           verbose=1)
-
-        clf.fit(x_train, y_train)
-        score = clf.best_score_
-        scores[coupling_type] = score
-        print(f'Best MSE score: {score}')
-        print(f'Best parameters: {clf.best_params_}')
+        # params = {'max_depth': [20, 30, 40, None],
+        #           'min_samples_split': [2, 20, 50],
+        #           'min_samples_leaf': [1, 20, 50],
+        #           'max_features': [0.5, None]}
+        #
+        # clf = GridSearchCV(estimator=RandomForestRegressor(n_estimators=300),
+        #                    param_grid=params,
+        #                    scoring='neg_mean_squared_error',
+        #                    n_jobs=8,
+        #                    cv=3,
+        #                    verbose=1)
+        #
+        # clf.fit(x_train, y_train)
+        # score = clf.best_score_
+        # scores[coupling_type] = score
+        # print(f'Best MSE score: {score}')
+        # print(f'Best parameters: {clf.best_params_}')
         ######################################## Train on all the data #################################################
-        # model = RandomForestRegressor(
-        #     n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
-        # )
-        model = clone(clf.best_estimator_)
+        model = RandomForestRegressor(
+            n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
+        )
+        # model = clone(clf.best_estimator_)
         model.fit(x_train, y_train)
         models[coupling_type] = model
 
@@ -105,7 +104,7 @@ if __name__ == '__main__':
             feature_importances[coupling_type][feature] = importance
 
         # save the model off
-        write_pickle(model, os.path.join(ROOT_DIR, f'models/tuned_rf/rf_{coupling_type}.pkl'))
+        # write_pickle(model, os.path.join(ROOT_DIR, f'models/tuned_rf/rf_{coupling_type}.pkl'))
         ###################################### Prepare the testing data ################################################
         test_df = pd.read_csv(os.path.join(TEST_DIR, filename))
 
