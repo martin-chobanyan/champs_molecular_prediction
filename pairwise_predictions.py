@@ -91,7 +91,7 @@ if __name__ == '__main__':
         # print(f'Best parameters: {clf.best_params_}')
         ######################################## Train on all the data #################################################
         model = RandomForestRegressor(
-            n_estimators=300, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
+            n_estimators=400, max_depth=None, max_features=0.5, min_samples_leaf=20, n_jobs=10
         )
         # model = clone(clf.best_estimator_)
         model.fit(x_train, y_train)
