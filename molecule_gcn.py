@@ -11,6 +11,7 @@ using the final node representations by using DistMult (a bilinear scoring funct
 """
 import os
 import time
+from argparse import ArgumentParser
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -34,7 +35,7 @@ from pairwise_predictions import process_filename
 ########################################################################################################################
 
 
-class MoleculeGraph(object):
+class MoleculeGraph:
     def __init__(self,
                  molecule_map,
                  base_atomic_features=None,
@@ -368,11 +369,17 @@ def early_stop(train_loader, eval_loader, model, optimizer, criterion, device, c
 
 
 if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--model_name', type=str, required=True)
+    # parser.add_argument('--epochs', type=int)
+    args = parser.parse_args()
+    model_name = args.model_name
+    # num_epochs = args.epochs
+
     ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
     TRAIN_DIR = os.path.join(ROOT_DIR, 'train')
     TEST_DIR = os.path.join(ROOT_DIR, 'test')
     MAX_MOL_SIZE = 29
-    model_name = 'edgeconv'
 
     submission_filepath = os.path.join(ROOT_DIR, f'submissions/{model_name}_submission.csv')
     submission_df = pd.read_csv(os.path.join(ROOT_DIR, 'submissions/submission.csv'))
@@ -383,7 +390,15 @@ if __name__ == '__main__':
     print('Creating the molecule features:')
     # mol_graphs = create_molecule_graphs(molecule_map, mol_graph)
     # mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/complete_graphs.pkl'))
-    mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/lmbtr_features_with_base.pkl'))
+    # mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_lmbtr_features.pkl'))
+
+    if 'acsf' in model_name:
+        mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_acsf_835_features.pkl'))
+    elif 'lmbtr' in model_name:
+        mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_lmbtr_1140_features.pkl'))
+    else:
+        raise ValueError('Wrong model name')
+
     num_features = mol_graphs['dsgdb9nsd_000011'][0].shape[1]
     print(f'Number of features: {num_features}')
     ####################################################################################################################
@@ -422,22 +437,23 @@ if __name__ == '__main__':
         for name in tqdm(names_val):
             data_val.append(graphs(name))
 
-        bsize = 1024
+        bsize = 512
         train_loader = DataLoader(data_train, batch_size=bsize, shuffle=True)
         val_loader = DataLoader(data_val, batch_size=bsize, shuffle=True)
 
         num_layers = 3
-        hidden_dim = 600  # previously 300
-        # device = torch.device('cuda')
+        hidden_dim = 1000  # previously 600
 
+        # device = torch.device('cuda')
         # model = EdgeConvNodePairScorer(num_features, hidden_dim, NodePairNet(hidden_dim), False, num_layers, 0)
         # model = model.to(device)
         # criterion = nn.MSELoss()
         # optimizer = Adam(model.parameters(), lr=0.0005)
 
         # stop_epoch, training_losses, validation_losses = early_stop(train_loader, val_loader,
-        #                                                             model, optimizer, criterion, device)
-        #
+        #                                                             model, optimizer, criterion, device,
+        #                                                             patience=18, max_epochs=200)
+
         # estop_scores = {'stop': stop_epoch, 'training_losses': training_losses, 'validation_losses': validation_losses}
         # scores[coupling_type] = estop_scores
         ######################################## Create the dataloader #################################################
@@ -452,17 +468,13 @@ if __name__ == '__main__':
         criterion = nn.MSELoss()
         optimizer = Adam(model.parameters(), lr=0.0005)
 
-        num_epochs = 80
+        num_epochs = 200  # 100 before
         for epoch in range(num_epochs):
             print(f'Epoch: {epoch}')
+            if epoch % 10 == 0:
+                write_pickle(model, f'/home/mchobanyan/data/kaggle/molecules/models/fully_trained_gcn/{coupling_type}_{model_name}_epoch_{epoch}.pkl')
             train_loss = train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device)
             print(f'Training loss:\t\t{train_loss}')
-
-        # num_epochs = stop_epoch
-        # for epoch in range(num_epochs):
-        #     print(f'Epoch: {epoch}')
-        #     train_loss = train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device)
-        #     print(f'Training loss:\t\t{train_loss}')
 
         models[coupling_type] = model
         ######################################## Make the predictions ##################################################
