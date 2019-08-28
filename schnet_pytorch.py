@@ -88,9 +88,43 @@ class SchNetUpdate(nn.Module):
         return x + v
 
 
+class SchNet(nn.Module):
+    """Custom SchNet defined for predicting the decomposed coupling constant"""
+    def __init__(self, input_dim=10, num_layers=3):
+        super().__init__()
+        self.num_layers = num_layers
+        self.gn = GraphLinear(input_dim, 512)
+
+        self.schnet_list = nn.ModuleList()
+        for l in range(self.num_layers):
+            self.schnet_list.append(SchNetUpdate(input_dim=512, hidden_dim=512, bnorm=True))
+
+        self.interaction1 = nn.Linear(1045, 128)
+        self.interaction2 = nn.Linear(128, 128)
+        self.interaction3 = nn.Linear(128, 4)
+
+
+    def forward(self, input_array, dists, pairs_index):
+        h = self.gn(input_array)
+        for update in self.schnet_list:
+            h = update(h, dists)
+        h = torch.cat([h, input_array], dim=2)
+
+        x = torch.cat([h[pairs_index[:, 0], pairs_index[:, 1], :],
+                       h[pairs_index[:, 0], pairs_index[:, 2], :],
+                       dists[pairs_index[:, 0], pairs_index[:, 1], pairs_index[:, 2]].unsqueeze(1)],
+                      dim=1)
+
+        x = F.leaky_relu(self.interaction1(x))
+        x = F.leaky_relu(self.interaction2(x))
+        x = self.interaction3(x)
+        return x
+
+
 if __name__ == '__main__':
-    model = SchNetUpdate(bnorm=True)
-    x = torch.rand(3, 4, 64)
+    model = SchNet()
+    x = torch.rand(3, 4, 10)
     d = torch.rand(3, 4, 4)
-    y = model(x, d)
+    p = torch.LongTensor([[0, 1, 2], [0, 0, 2], [1, 1, 3], [1, 0, 1], [1, 1, 2], [2, 2, 3]])
+    y = model(x, d, p)
     print(y.shape)
