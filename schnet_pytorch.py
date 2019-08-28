@@ -143,32 +143,59 @@ class SchNet(nn.Module):
 
 
 class MoleculeGraph(Dataset):
-    def __init__(self, molecule_map):
+    def __init__(self, molecule_map, pair_map, coupling_map):
         super().__init__()
+        self.molecule_names = list(molecule_map.keys())
         self.molecule_map = molecule_map
+        self.pair_map = pair_map
+        self.coupling_map = coupling_map
 
-    def __getitem__(self, name):
-        # collect the molecular information
-        molecule = self.molecule_map[name]
-        distances = torch.Tensor(molecule['distance_matrix'])
-        self.atoms = molecule['symbols']
-        self.num_nodes = len(self.atoms)
+    def __create_features(self, molecule):
         edge_index = molecule['bonds']
+        atoms = molecule['symbols']
 
         # onehot encode the atomic symbols in the molecule
-        one_hot = torch.Tensor([encode_element(a) for a in self.atoms])
+        one_hot = torch.Tensor([encode_element(a) for a in atoms])
 
         # onehot encode the node degrees
-        degrees = torch.LongTensor([torch.sum(edge_index[0] == atom_i) for atom_i in range(self.num_nodes)])
+        degrees = torch.LongTensor([torch.sum(edge_index[0] == atom_i) for atom_i in range(len(atoms))])
         bonds = torch.eye(5)[degrees - 1]
 
         # concatenate the two onehot encodings into a feature matrix
-        x = torch.cat([one_hot, bonds], dim=1)
+        return torch.cat([one_hot, bonds], dim=1)
 
-        return x, distances
+    def __getitem__(self, idx):
+        molecule_name = self.molecule_names[idx]
+        molecule = self.molecule_map[molecule_name]
+
+        # get the feature matrix
+        x = self.__create_features(molecule)
+
+        # get the distance matrix
+        distances = torch.Tensor(molecule['distance_matrix'])
+
+        # get the atom pairs and molecule index
+        pairs = torch.LongTensor(self.pair_map[molecule_name])
+        mol_idx = torch.LongTensor([idx] * len(pairs))
+        pairs = torch.cat([mol_idx, pairs], dim=1)
+
+        # get the target couplings
+        couplings = torch.Tensor(self.coupling_map[molecule_name])
+        couplings = couplings.view(-1, 1)
+
+        return x, distances, pairs, couplings
 
     def __len__(self):
         return len(self.molecule_map)
+
+
+class SameSizeSampler(Sampler):
+    def __init__(self, dataset):
+        super().__init__(dataset)
+
+
+
+
 
 
 if __name__ == '__main__':
