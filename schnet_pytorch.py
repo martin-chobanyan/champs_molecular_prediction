@@ -42,7 +42,7 @@ class CFConv(nn.Module):
             raise ValueError(f'The last dimension of the input tensor "h" ({ch}) '
                              f'does not match the hidden dim ({self.hidden_dim})')
 
-        embedlist = torch.arange(self.num_rbf) * self.radius_resolution
+        embedlist = torch.arange(self.num_rbf, dtype=torch.float32) * self.radius_resolution
         dist = dist.view(mb, atom, atom, 1)
         dist = torch.repeat_interleave(dist, self.num_rbf, dim=-1)
         dist = torch.exp(-self.gamma * (dist - embedlist) ** 2)
