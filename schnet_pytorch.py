@@ -17,6 +17,17 @@ class GraphLinear(nn.Linear):
         return x
 
 
+class GraphBatchNorm(nn.BatchNorm1d):
+    """x is a 3D tensor"""
+    def __call__(self, x):
+        s0, s1, s2 = x.size()
+        x = x.view((s0 * s1), s2)
+        x = super().__call__(x)
+        x = x.view(s0, s1, s2)
+        return x
+
+
+# TODO: does the softplus for pytorch differ from chainer?
 class CFConv(nn.Module):
     """Continuous filter convolution"""
     def __init__(self, num_rbf=300, radius_resolution=0.1, gamma=10.0, hidden_dim=64):
@@ -54,3 +65,23 @@ class CFConv(nn.Module):
         h = torch.repeat_interleave(h, atom, dim=2)
         h = torch.sum(h * dist, dim=1)
         return h
+
+
+# TODO: should the input to the graph linear layer be hidden_dim?
+class SchNetUpdate(nn.Module):
+    def __init__(self, hidden_dim=64, bnorm=False):
+        super().__init__()
+        self.linear1 = GraphLinear(hidden_dim, hidden_dim)
+        self.linear2 = GraphLinear(hidden_dim, hidden_dim)
+        self.linear3 = GraphLinear(hidden_dim, hidden_dim)
+        self.cfconv = CFConv(hidden_dim=hidden_dim)
+        self.bnorm = GraphBatchNorm(hidden_dim) if bnorm else None
+        self.hidden_dim = hidden_dim
+
+    def __call__(self, x, dist):
+        v = self.linear1(x)
+        v = self.cfconv(v, dist)
+        v = F.softplus(self.linear2(v))
+        v = self.linear3(v)
+        v = self.bnorm(v) if self.bnorm else v
+        return x + v
