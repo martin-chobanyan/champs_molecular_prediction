@@ -9,20 +9,20 @@ import torch.nn.functional as F
 
 class GraphLinear(nn.Linear):
     """3D input, apply Linear to the third axis of x with shape [batch_size, molecule_idx, atom_idx]"""
-    def __call__(self, x):
+    def forward(self, x):
         s0, s1, s2 = x.size()
         x = x.view(s0*s1, s2)
-        x = super().__call__(x)
+        x = super().forward(x)
         x = x.view(s0, s1, self.out_features)
         return x
 
 
 class GraphBatchNorm(nn.BatchNorm1d):
     """x is a 3D tensor"""
-    def __call__(self, x):
+    def forward(self, x):
         s0, s1, s2 = x.size()
         x = x.view((s0 * s1), s2)
-        x = super().__call__(x)
+        x = super().forward(x)
         x = x.view(s0, s1, s2)
         return x
 
@@ -39,7 +39,7 @@ class CFConv(nn.Module):
         self.radius_resolution = radius_resolution
         self.gamma = gamma
 
-    def __call__(self, h, dist):
+    def forward(self, h, dist):
         """
         Parameters
         ----------
@@ -67,21 +67,30 @@ class CFConv(nn.Module):
         return h
 
 
-# TODO: should the input to the graph linear layer be hidden_dim?
 class SchNetUpdate(nn.Module):
-    def __init__(self, hidden_dim=64, bnorm=False):
+    def __init__(self, input_dim=None, hidden_dim=64, bnorm=False):
         super().__init__()
+        input_dim = hidden_dim if input_dim is None else input_dim
         self.linear1 = GraphLinear(hidden_dim, hidden_dim)
         self.linear2 = GraphLinear(hidden_dim, hidden_dim)
         self.linear3 = GraphLinear(hidden_dim, hidden_dim)
         self.cfconv = CFConv(hidden_dim=hidden_dim)
         self.bnorm = GraphBatchNorm(hidden_dim) if bnorm else None
+        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
 
-    def __call__(self, x, dist):
+    def forward(self, x, dist):
         v = self.linear1(x)
         v = self.cfconv(v, dist)
         v = F.softplus(self.linear2(v))
         v = self.linear3(v)
         v = self.bnorm(v) if self.bnorm else v
         return x + v
+
+
+if __name__ == '__main__':
+    model = SchNetUpdate(bnorm=True)
+    x = torch.rand(3, 4, 64)
+    d = torch.rand(3, 4, 4)
+    y = model(x, d)
+    print(y.shape)
