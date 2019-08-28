@@ -5,13 +5,21 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, Sampler
+from features import encode_element
+
+
+########################################################################################################################
+#                                               Define the Modules
+########################################################################################################################
 
 
 class GraphLinear(nn.Linear):
     """3D input, apply Linear to the third axis of x with shape [batch_size, molecule_idx, atom_idx]"""
+
     def forward(self, x):
         s0, s1, s2 = x.size()
-        x = x.view(s0*s1, s2)
+        x = x.view(s0 * s1, s2)
         x = super().forward(x)
         x = x.view(s0, s1, self.out_features)
         return x
@@ -19,6 +27,7 @@ class GraphLinear(nn.Linear):
 
 class GraphBatchNorm(nn.BatchNorm1d):
     """x is a 3D tensor"""
+
     def forward(self, x):
         s0, s1, s2 = x.size()
         x = x.view((s0 * s1), s2)
@@ -27,9 +36,9 @@ class GraphBatchNorm(nn.BatchNorm1d):
         return x
 
 
-# TODO: does the softplus for pytorch differ from chainer?
 class CFConv(nn.Module):
     """Continuous filter convolution"""
+
     def __init__(self, num_rbf=300, radius_resolution=0.1, gamma=10.0, hidden_dim=64):
         super().__init__()
         self.dense1 = nn.Linear(num_rbf, hidden_dim)
@@ -90,21 +99,28 @@ class SchNetUpdate(nn.Module):
 
 class SchNet(nn.Module):
     """Custom SchNet defined for predicting the decomposed coupling constant"""
-    def __init__(self, input_dim=10, num_layers=3):
+
+    def __init__(self, input_dim=10, hidden_dim=512, num_layers=3):
         super().__init__()
         self.num_layers = num_layers
-        self.gn = GraphLinear(input_dim, 512)
+        self.gn = GraphLinear(input_dim, hidden_dim)
 
         self.schnet_list = nn.ModuleList()
         for l in range(self.num_layers):
-            self.schnet_list.append(SchNetUpdate(input_dim=512, hidden_dim=512, bnorm=True))
+            self.schnet_list.append(SchNetUpdate(hidden_dim=hidden_dim, bnorm=True))
 
-        self.interaction1 = nn.Linear(1045, 128)
+        self.interaction1 = nn.Linear(2 * (input_dim + hidden_dim) + 1, 128)
         self.interaction2 = nn.Linear(128, 128)
         self.interaction3 = nn.Linear(128, 4)
 
-
     def forward(self, input_array, dists, pairs_index):
+        """
+        Parameters
+        ----------
+        input_array: [batch size, number of atoms, feature dim]
+        dists: [batch size, number of atoms, number of atoms]
+        pairs_index: [num couplings, 3]
+        """
         h = self.gn(input_array)
         for update in self.schnet_list:
             h = update(h, dists)
@@ -121,10 +137,59 @@ class SchNet(nn.Module):
         return x
 
 
+########################################################################################################################
+#                                               Define the DataLoader
+########################################################################################################################
+
+
+class MoleculeGraph(Dataset):
+    def __init__(self, molecule_map):
+        super().__init__()
+        self.molecule_map = molecule_map
+
+    def __getitem__(self, name):
+        # collect the molecular information
+        molecule = self.molecule_map[name]
+        distances = torch.Tensor(molecule['distance_matrix'])
+        self.atoms = molecule['symbols']
+        self.num_nodes = len(self.atoms)
+        edge_index = molecule['bonds']
+
+        # onehot encode the atomic symbols in the molecule
+        one_hot = torch.Tensor([encode_element(a) for a in self.atoms])
+
+        # onehot encode the node degrees
+        degrees = torch.LongTensor([torch.sum(edge_index[0] == atom_i) for atom_i in range(self.num_nodes)])
+        bonds = torch.eye(5)[degrees - 1]
+
+        # concatenate the two onehot encodings into a feature matrix
+        x = torch.cat([one_hot, bonds], dim=1)
+
+        return x, distances
+
+    def __len__(self):
+        return len(self.molecule_map)
+
+
 if __name__ == '__main__':
-    model = SchNet()
-    x = torch.rand(3, 4, 10)
-    d = torch.rand(3, 4, 4)
-    p = torch.LongTensor([[0, 1, 2], [0, 0, 2], [1, 1, 3], [1, 0, 1], [1, 1, 2], [2, 2, 3]])
-    y = model(x, d, p)
-    print(y.shape)
+    # model = SchNet()
+    # x = torch.rand(3, 4, 10)
+    # d = torch.rand(3, 4, 4)
+    # p = torch.LongTensor([[0, 1, 2], [0, 0, 2], [1, 1, 3], [1, 0, 1], [1, 1, 2], [2, 2, 3]])
+    # y = model(x, d, p)
+    # print(y.shape)
+
+    # from dtsckit.utils import read_pickle
+    # molecule_map = read_pickle('/home/mchobanyan/data/kaggle/molecules/molecular_structure_map.pkl')
+    # count = 0
+    # dataset = MoleculeGraph(molecule_map)
+    # for name in molecule_map.keys():
+    #     x, d = dataset[name]
+    #     print(x)
+    #     print(d)
+    #     print('------------------------------')
+    #     count += 1
+    #     if count == 5:
+    #         break
+    print()
+
