@@ -11,7 +11,7 @@ output_path = os.path.join(SUBMISSION_DIR, 'submission.csv')
 
 index = None
 predictions = None
-weights = {'pairwise': 0.1, 'edgeconv_acsf_835': 0.1, 'edgeconv_lmbtr_1140': 0.8}
+weights = {'edgeconv_acsf_835': 0.4, 'edgeconv_lmbtr_1140': 0.4, 'edgeconv_soap_1050': 0.2}
 for model_name, weight in weights.items():
     print(model_name)
     df = pd.read_csv(os.path.join(SUBMISSION_DIR, f'{model_name}_submission.csv'))
@@ -22,3 +22,4 @@ for model_name, weight in weights.items():
 
 df = pd.DataFrame({'id': index, 'scalar_coupling_constant': predictions})
 df.to_csv(output_path, index=False)
+print(f'Saved average results to: {output_path}')
