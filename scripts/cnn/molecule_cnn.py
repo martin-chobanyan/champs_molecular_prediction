@@ -19,8 +19,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from dtsckit.metrics import AverageKeeper
-from dtsckit.utils import read_pickle
+
+from misc import AverageKeeper, read_pickle
 from features import calculate_coulomb_matrix, calculate_connectivity_matrix, calculate_cep_matrix
 
 MAX_MOL_SIZE = 29

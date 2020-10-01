@@ -7,7 +7,7 @@ from argparse import ArgumentParser
 
 import numpy as np
 import pandas as pd
-from dtsckit.utils import read_pickle
+from misc import read_pickle
 
 from chem_math import find_atomic_path, vectorized_dihedral_angle, bond_angle
 from features import encode_hybridization

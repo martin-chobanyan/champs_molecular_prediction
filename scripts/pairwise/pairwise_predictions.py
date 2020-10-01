@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
-from dtsckit.utils import write_pickle
+from misc import write_pickle
 from pairwise_features import Prepare1JH_, Prepare2JHH, Prepare2JH_, Prepare3JHH, Prepare3JH_
 
 

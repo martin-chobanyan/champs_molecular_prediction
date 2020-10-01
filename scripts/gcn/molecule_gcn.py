@@ -3,11 +3,13 @@
 """
 Description:
 - The idea behind this approach is to represent each molecule as a graph with atoms as nodes and bonds as edges.
-- Each node will have an initial feature vector modeling its elemental and neighborhood properties (e.g. ACSF).
-- The edges will be represented as an adjacency matrix (which can optionally be weighted by the bond order)
-- Different flavors of GCN models will be applied to the graph. The scalar coupling constant can be predicted
-using the final node representations by using DistMult (a bilinear scoring function).
-- If training on all of the data at once, it would make sense to have separate DistMult matrices for each coupling type.
+- Each node will have an initial feature vector modeling its local atomic environment
+- These feature vectors can be constructed using chemical descriptors such as:
+    - ACSF (Atom-Centered Symmetry Functions)
+    - LMBTR (Local Many-Body Tensor Representation)
+    - SOAP (Smooth Overlap of Atomic Positions)
+- Different flavors of GCN models are provided to apply on the graph. The scalar coupling constant can be predicted by
+passing the final node representations to a bilinear scoring functions (e.g. DistMult)
 """
 import os
 import time
@@ -17,8 +19,7 @@ import pandas as pd
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from dtsckit.model import AverageKeeper
-from dtsckit.utils import read_pickle, write_pickle
+from misc import AverageKeeper, read_pickle, write_pickle
 
 import torch
 import torch.nn as nn
@@ -35,6 +36,7 @@ from pairwise_predictions import process_filename
 ########################################################################################################################
 
 
+# TODO: update this so that it uses the base features + an optional descriptor
 class MoleculeGraph:
     def __init__(self,
                  molecule_map,
@@ -68,22 +70,35 @@ class MoleculeGraph:
 
 
 def create_molecule_graphs(molecule_map, generate_mol_graph):
+    """Generates the molecular graphs and stores the results in a dictionary
+
+    Parameters
+    ----------
+    molecule_map: dict
+        A dictionary mapping each molecule string id to a dictionary containing its properties
+    generate_mol_graph: callable
+        A callable object that returns the graph representation of the molecule (nodes and edges)
+
+    Returns
+    -------
+    molecule_graphs: dict
+        A dictionary mapping the molecule string id to its graph representation
+    """
     molecule_graphs = dict()
     for name in tqdm(molecule_map.keys()):
-        if name != 'scalar_descriptor_keys':
-            molecule_graphs[name] = generate_mol_graph(name)
+        molecule_graphs[name] = generate_mol_graph(name)
     return molecule_graphs
 
 
-class MoleculeData(object):
-    def __init__(self, mol_graph, df, edge_map=None):
+# TODO: modify and document
+class MoleculeData:
+    """This class collects the input features for the GCN model along with the target values"""
+    def __init__(self, mol_graph, df):
         self.mol_graph = mol_graph
-        self.edge_map = edge_map
         self.df = df
 
     def __call__(self, name):
         x, edge_index = self.mol_graph[name]
-        edge_attr = torch.FloatTensor(self.edge_map(name)) if self.edge_map is not None else torch.FloatTensor([])
         num_atoms = torch.LongTensor([x.shape[0]])
 
         molecule_rows = self.df.loc[self.df['molecule_name'] == name]
@@ -93,7 +108,6 @@ class MoleculeData(object):
 
         return Data(x=x,
                     edge_index=edge_index,
-                    edge_attr=edge_attr,
                     atom_pairs=atom_pairs,
                     couplings=couplings,
                     num_atoms=num_atoms,
@@ -106,7 +120,6 @@ class MoleculeData(object):
 
 class GCNSequential(nn.Sequential):
     """A subclass of Sequential that extends the functionality for pytorch geometric layers"""
-
     def forward(self, *inputs):
         for module in self._modules.values():
             if isinstance(module, MessagePassing):
@@ -129,10 +142,12 @@ class NodePairScorer(nn.Module):
         The initial dimension of the node representations.
     hidden_dim: int
         The dimension of the node representation in the hidden layers.
-    dropout: float
+    distmult: bool, optional
+        If True then DistMult is used as the scoring function.
+        If False, a two layer feedforward net is used with leaky ReLU (default=False).
+    dropout: float, optional
         The dropout probability to apply to the input fully connected layer (default=0; no dropout)
     """
-
     def __init__(self, input_dim, hidden_dim, distmult=False, dropout=0.0):
         super().__init__()
         self.input_dim = input_dim
@@ -141,8 +156,10 @@ class NodePairScorer(nn.Module):
         self.gcn = None  # this attribute should be extended with the appropriate graph convolutions
         self.distmult = distmult
         if distmult:
+            # initialize a learnable DistMult diagonal
             self.scorer = nn.Parameter(torch.rand(1, hidden_dim))
         else:
+            # initialize a bilinear network that takes two concatenated atomic representations and maps them to a score
             self.scorer = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.LeakyReLU(), nn.Linear(hidden_dim, 1))
 
 
@@ -169,9 +186,8 @@ class NodePairScorer(nn.Module):
             x = torch.cat([x_i, x_j], dim=1)
             return self.scorer(x).view(-1)
 
-    def forward(self, x, edge_index, node_i, node_j, edge_attr=None):
-        """Run the model (should not be directly called, only extended)
-
+    def forward(self, x, edge_index, node_i, node_j):
+        """
         Parameters
         ----------
         x: torch.Tensor
@@ -183,9 +199,6 @@ class NodePairScorer(nn.Module):
             A tensor with shape [num_pairs] defining the index of the first node in each of the node pairs.
         node_j: torch.LongTensor
             A tensor with shape [num_pairs] defining the index of the second node in each of the node pairs.
-        edge_attr: torch.Tensor
-            A tensor with shape [num_edges, num_edge_features] containing the features of each edge.
-            This should only be specified if the 'gcn' attribute uses edge labels (e.g. NNConv).
 
         Returns
         -------
@@ -193,15 +206,13 @@ class NodePairScorer(nn.Module):
             A tensor of shape [num_pairs] containing the scores of each node pair.
         """
         x = self.map_input(x)
-        if edge_attr is None:
-            x = self.gcn(x, edge_index)
-        else:
-            x = self.gcn(x, edge_index, edge_attr)
+        x = self.gcn(x, edge_index)
         scores = self.score_node_pairs(x[node_i], x[node_j])
         return scores
 
 
 class GCNConvNodePairScorer(NodePairScorer):
+    """A node pair scorer using the vanilla graph convolution model"""
     def __init__(self, input_dim, hidden_dim, distmult=False, num_layers=1, dropout=0):
         super().__init__(input_dim, hidden_dim, distmult, dropout)
         gcn_layers = []
@@ -213,27 +224,44 @@ class GCNConvNodePairScorer(NodePairScorer):
 
 
 class APPNPNodePairScorer(NodePairScorer):
+    """A node pair scorer using the "Approximate Personalized Propagation of Neural Predictions" as the gcn module"""
     def __init__(self, input_dim, hidden_dim, distmult=False, k=10, alpha=0.1, dropout=0):
         super().__init__(input_dim, hidden_dim, distmult, dropout)
         self.gcn = APPNP(K=k, alpha=alpha)
 
 
 class GATNodePairScorer(NodePairScorer):
-    def __init__(self, input_dim, hidden_dim, distmult=False,
-                 num_layers=1, heads=1, concat_heads=True, leaky_slope=0.2, gat_dropout=0,
-                 update_activation=True, input_dropout=0):
+    """A node pair scorer using Graph Attention Networks as the gcn module
 
-        super().__init__(input_dim, hidden_dim, distmult, input_dropout)
+    Parameters
+    ----------
+    input_dim: int
+    hidden_dim: int
+    distmult: bool
+    num_layers: int, optional
+    heads: int, optional
+        The number of heads to use in the multi-head attention mechanism in GAT (default=1)
+    concat_heads: bool, optional
+        If True, then the heads are concatenated. If False, then the heads are averaged (default=True).
+    dropout: float, optional
+    """
+    def __init__(self, input_dim, hidden_dim, distmult=False, num_layers=1, heads=1, concat_heads=True, dropout=0):
+        super().__init__(input_dim, hidden_dim, distmult, dropout)
         gcn_layers = []
         for _ in range(num_layers - 1):
-            gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, gat_dropout))
-            if update_activation:
-                gcn_layers.append(nn.LeakyReLU())
-        gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads, leaky_slope, gat_dropout))
+            gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads))
+            gcn_layers.append(nn.LeakyReLU())
+        gcn_layers.append(GATConv(hidden_dim, hidden_dim, heads, concat_heads))
         self.gcn = GCNSequential(*gcn_layers)
 
 
 class NNConvNodePairScorer(NodePairScorer):
+    """Uses the NNConv as the gcn module
+
+    Note: this flavor of GCN takes an input of edge features and passes them through the 'edge_net' module to create
+    the convolutional filters. The goal was to use the bond properties (e.g. distance, bond order), but the results
+    did not beat EdgeConvNodePairScorer. NodePairScorer no longer supports NNConv in order to make the code simpler.
+    """
     def __init__(self, input_dim, hidden_dim, edge_net, distmult=False, num_layers=1, dropout=0):
         super().__init__(input_dim, hidden_dim, distmult, dropout)
         gcn_layers = []
@@ -244,6 +272,18 @@ class NNConvNodePairScorer(NodePairScorer):
 
 
 class EdgeConvNodePairScorer(NodePairScorer):
+    """A node pair scorer that uses EdgeConv as its gcn module
+
+    Parameters
+    ----------
+    input_dim: int
+    hidden_dim: int
+    distmult: bool
+    num_layers: int, optional
+    node_pair_net: nn.Module
+        A pytorch model mapping [*, 2*hidden_dim] to [*, hidden_dim]
+    dropout: float, optional
+    """
     def __init__(self, input_dim, hidden_dim, node_pair_net, distmult=False, num_layers=1, dropout=0):
         super().__init__(input_dim, hidden_dim, distmult, dropout)
         gcn_layers = []
@@ -255,6 +295,7 @@ class EdgeConvNodePairScorer(NodePairScorer):
 
 
 class NodePairNet(nn.Module):
+    """Base node pair module for EdgeConvNodePairScorer"""
     def __init__(self, dim, dropout=0):
         super().__init__()
         self.fc1 = nn.Linear(2 * dim, dim)
@@ -290,22 +331,31 @@ def update_batch_atom_pairs(batch):
 
     for offset, (i, j) in zip(offsets, zip(coupling_lens[:-1], coupling_lens[1:])):
         atom_pairs[i:j] += offset
-
     batch['atom_pairs'] = atom_pairs
 
 
 def train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device):
+    """Train a NodePairScorer for a single epoch
+
+    Parameters
+    ----------
+    model: NodePairScorer
+    dataloader: DataLoader
+    criterion: loss function
+    optimizer: pytorch optimizer
+    device: torch.device
+
+    Returns
+    -------
+    avg_loss: float
+    """
     model.train()
     avg_keeper = AverageKeeper()
-    use_edge_attr = isinstance(model, NNConvNodePairScorer)
     for batch in dataloader:
         update_batch_atom_pairs(batch)
         batch = batch.to(device)
         optimizer.zero_grad()
-        if use_edge_attr:
-            pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1], batch.edge_attr)
-        else:
-            pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1])
+        pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1])
         loss = criterion(pred, batch.couplings)
         loss.backward()
         optimizer.step()
@@ -315,24 +365,35 @@ def train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device):
 
 
 def validate_molecule_gcn_epoch(model, dataloader, criterion, device):
+    """Run the model on a validation set
+
+    Parameters
+    ----------
+    model: NodePairScorer
+    dataloader: DataLoader
+    criterion: loss function
+    device: torch.device
+
+    Returns
+    -------
+    avg_loss: float
+    """
     model.eval()
     avg_keeper = AverageKeeper()
-    use_edge_attr = isinstance(model, NNConvNodePairScorer)
     with torch.no_grad():
         for batch in dataloader:
             update_batch_atom_pairs(batch)
             batch = batch.to(device)
-            if use_edge_attr:
-                pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1], batch.edge_attr)
-            else:
-                pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1])
+            pred = model(batch.x, batch.edge_index, batch.atom_pairs[:, 0], batch.atom_pairs[:, 1])
             loss = criterion(pred, batch.couplings)
             avg_keeper.add(loss)
     avg_loss = avg_keeper.calculate()
     return avg_loss
 
 
+# TODO: add documentation
 def early_stop(train_loader, eval_loader, model, optimizer, criterion, device, check=1, patience=16, max_epochs=160):
+    """Performs early stopping for NodePairScorer models"""
     epoch = 0
     p = 0
     best_validation_loss = float('inf')
@@ -368,19 +429,9 @@ def early_stop(train_loader, eval_loader, model, optimizer, criterion, device, c
     return stop_epoch, training_losses, validation_losses
 
 
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument('--model_name', type=str, required=True)
-    # parser.add_argument('--epochs', type=int)
-    args = parser.parse_args()
-    model_name = args.model_name
-    # num_epochs = args.epochs
-
-    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
-    TRAIN_DIR = os.path.join(ROOT_DIR, 'train')
-    TEST_DIR = os.path.join(ROOT_DIR, 'test')
-    MAX_MOL_SIZE = 29
-
+def train_and_make_predictions(root_dir, model_name):
+    train_dir = os.path.join(root_dir, 'train')
+    test_dir = os.path.join(root_dir, 'test')
     submission_filepath = os.path.join(ROOT_DIR, f'submissions/{model_name}_submission.csv')
     submission_df = pd.read_csv(os.path.join(ROOT_DIR, 'submissions/submission.csv'))
     submission_df['scalar_coupling_constant'] = 0
@@ -388,14 +439,19 @@ if __name__ == '__main__':
 
     ###################################### Define the local molecular descriptors ######################################
     print('Creating the molecule features:')
-    # mol_graphs = create_molecule_graphs(molecule_map, mol_graph)
-    # mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/complete_graphs.pkl'))
-    # mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_lmbtr_features.pkl'))
-
+    # TODO: update these conditions
     if 'acsf' in model_name:
         mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_acsf_835_features.pkl'))
+        acsf_averages, acsf_std_devs = read_pickle('/home/mchobanyan/data/kaggle/molecules/graphs/acsf_standardize.pkl')
+        eps = 0.0000001
+        for molecule_name in tqdm(mol_graphs):
+            x, edges = mol_graphs[molecule_name]
+            x = (x - acsf_averages) / (acsf_std_devs + eps)
+            mol_graphs[molecule_name] = x, edges
     elif 'lmbtr' in model_name:
         mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_lmbtr_1140_features.pkl'))
+    elif 'soap' in model_name:
+        mol_graphs = read_pickle(os.path.join(ROOT_DIR, 'graphs/graphs_standardized_soap_1050_noF.pkl'))
     else:
         raise ValueError('Wrong model name')
 
@@ -405,13 +461,13 @@ if __name__ == '__main__':
     models = dict()
     scores = dict()
     total_time = 0
-    for filename in os.listdir(TRAIN_DIR):
+    for filename in os.listdir(train_dir):
         ######################################## Load the training data ################################################
         start_time = time.time()
         coupling_type, *_ = process_filename(filename)
         print(f'\nTraining model for {coupling_type}')
         col_subset = ['id', 'molecule_name', 'atom_index_0', 'atom_index_1', 'scalar_coupling_constant']
-        train_df = pd.read_csv(os.path.join(TRAIN_DIR, filename))[col_subset]
+        train_df = pd.read_csv(os.path.join(train_dir, filename))[col_subset]
         print(train_df.shape)
 
         standardize = StandardScaler()
@@ -442,7 +498,7 @@ if __name__ == '__main__':
         val_loader = DataLoader(data_val, batch_size=bsize, shuffle=True)
 
         num_layers = 3
-        hidden_dim = 1000  # previously 600
+        hidden_dim = 1000  # previously 1000
 
         # device = torch.device('cuda')
         # model = EdgeConvNodePairScorer(num_features, hidden_dim, NodePairNet(hidden_dim), False, num_layers, 0)
@@ -468,17 +524,18 @@ if __name__ == '__main__':
         criterion = nn.MSELoss()
         optimizer = Adam(model.parameters(), lr=0.0005)
 
-        num_epochs = 200  # 100 before
+        num_epochs = 200  # 200 before
         for epoch in range(num_epochs):
             print(f'Epoch: {epoch}')
             if epoch % 10 == 0:
-                write_pickle(model, f'/home/mchobanyan/data/kaggle/molecules/models/fully_trained_gcn/{coupling_type}_{model_name}_epoch_{epoch}.pkl')
+                write_pickle(model,
+                             f'/home/mchobanyan/data/kaggle/molecules/models/fully_trained_gcn/{coupling_type}_{model_name}_epoch_{epoch}.pkl')
             train_loss = train_molecule_gcn_epoch(model, dataloader, criterion, optimizer, device)
             print(f'Training loss:\t\t{train_loss}')
 
         models[coupling_type] = model
         ######################################## Make the predictions ##################################################
-        test_df = pd.read_csv(os.path.join(TEST_DIR, filename))
+        test_df = pd.read_csv(os.path.join(test_dir, filename))
 
         row_ids = []
         preds = []
@@ -509,8 +566,16 @@ if __name__ == '__main__':
         ################################################################################################################
 
     print(f'\nTotal time elapsed: {total_time} hours')
-    print('\nSaving the submissions...')
+    print(f'\nSaving the submissions to {submission_filepath}')
     write_pickle(models, os.path.join(ROOT_DIR, f'models/gcn/{model_name}_models.pkl'))
     write_pickle(scores, os.path.join(ROOT_DIR, f'models/gcn/{model_name}_scores.pkl'))
     submission_df.to_csv(submission_filepath, index=False)
     print('Done!')
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--model_name', type=str, required=True)
+    args = parser.parse_args()
+    ROOT_DIR = '/home/mchobanyan/data/kaggle/molecules/'
+    train_and_make_predictions(ROOT_DIR, args.model_name)
